@@ -1,0 +1,27 @@
+[package]
+name = "vo-pager"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "View Optimally: a bounded-memory terminal pager"
+license = "MIT"
+
+[[bin]]
+name = "vo"
+path = "src/main.rs"
+
+[dependencies]
+lexopt = "0.3"
+libc = "0.2"
+memchr = "2.8"
+regex-automata = { version = "0.4", default-features = false, features = ["std", "syntax", "dfa-build", "dfa-search"] }
+tempfile = "3.24"
+terminfo = "0.9"
+term = "1.2"
+unicode-width = "0.2"
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = true
