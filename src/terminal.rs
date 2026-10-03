@@ -62,6 +62,7 @@ pub enum Key {
     End,
     Delete,
     Tab,
+    F1,
 }
 
 #[derive(Debug, Default)]
@@ -509,6 +510,7 @@ impl Controls {
             ("key_end", Key::End),
             ("key_dc", Key::Delete),
             ("key_backspace", Key::Backspace),
+            ("key_f1", Key::F1),
         ] {
             let bytes = raw_string(database, name);
             if !bytes.is_empty() {
@@ -597,11 +599,13 @@ impl Decoder {
         let mut consumed = 0;
         while consumed < self.pending.len() {
             let bytes = &self.pending[consumed..];
-            let decoded = if bytes[0] == 0x1b {
-                self.escape(bytes, expired)
-            } else {
-                self.character(bytes, expired)
-            };
+            let decoded = self.known_key(bytes, expired).unwrap_or_else(|| {
+                if bytes[0] == 0x1b {
+                    self.escape(bytes, expired)
+                } else {
+                    self.character(bytes, expired)
+                }
+            });
             match decoded {
                 Decoded::Key(key, count) => {
                     result.push(key);
@@ -626,19 +630,23 @@ impl Decoder {
         result
     }
 
-    fn escape(&self, bytes: &[u8], expired: bool) -> Decoded {
+    fn known_key(&self, bytes: &[u8], expired: bool) -> Option<Decoded> {
         for (sequence, key) in &self.keys {
             if bytes.starts_with(sequence) {
-                return if self.pasting {
+                return Some(if self.pasting {
                     Decoded::Skip(sequence.len())
                 } else {
                     Decoded::Key(*key, sequence.len())
-                };
+                });
             }
             if sequence.starts_with(bytes) && !expired {
-                return Decoded::Pending;
+                return Some(Decoded::Pending);
             }
         }
+        None
+    }
+
+    fn escape(&self, bytes: &[u8], expired: bool) -> Decoded {
         if bytes.len() == 1 {
             return if expired {
                 if self.pasting {
@@ -648,6 +656,20 @@ impl Decoder {
                 }
             } else {
                 Decoded::Pending
+            };
+        }
+        if bytes.starts_with(b"\x1b[[") {
+            if bytes.len() < 4 {
+                return if expired {
+                    Decoded::Skip(bytes.len())
+                } else {
+                    Decoded::Pending
+                };
+            }
+            return if bytes[3] == b'A' && !self.pasting {
+                Decoded::Key(Key::F1, 4)
+            } else {
+                Decoded::Skip(4)
             };
         }
         if bytes[1] == b'[' || bytes[1] == b'O' {
@@ -683,12 +705,16 @@ impl Decoder {
                 b'D' => Some(Key::Left),
                 b'H' => Some(Key::Home),
                 b'F' => Some(Key::End),
+                b'P' if (bytes[1] == b'O' && parameter.is_empty()) || parameter == b"1" => {
+                    Some(Key::F1)
+                }
                 b'~' => match parameter {
                     b"1" | b"7" => Some(Key::Home),
                     b"3" => Some(Key::Delete),
                     b"4" | b"8" => Some(Key::End),
                     b"5" => Some(Key::PageUp),
                     b"6" => Some(Key::PageDown),
+                    b"11" => Some(Key::F1),
                     _ => None,
                 },
                 _ => None,
@@ -863,9 +889,52 @@ mod tests {
     }
 
     #[test]
+    fn decodes_split_f1_fallbacks() {
+        for sequence in [
+            &b"\x1bOP"[..],
+            &b"\x1b[11~"[..],
+            &b"\x1b[[A"[..],
+            &b"\x1b[1;2P"[..],
+        ] {
+            let mut decoder = Decoder::new(Vec::new());
+            for (index, byte) in sequence.iter().enumerate() {
+                decoder.feed(std::slice::from_ref(byte));
+                let keys = decoder.decode(false);
+                if index + 1 == sequence.len() {
+                    assert_eq!(keys, [Key::F1], "sequence {sequence:?}");
+                } else {
+                    assert!(keys.is_empty(), "sequence {sequence:?}, byte {index}");
+                }
+            }
+            assert!(decoder.decode(false).is_empty());
+        }
+        let mut decoder = Decoder::new(Vec::new());
+        decoder.feed(b"\x1b[[B");
+        assert!(decoder.decode(false).is_empty());
+    }
+
+    #[test]
+    fn decodes_custom_terminfo_f1_sequences() {
+        for sequence in [&b"\x1b[97~"[..], &b"\x01F"[..]] {
+            let mut builder = Database::new();
+            builder.name("test");
+            builder.raw("key_f1", sequence.to_vec());
+            let database = builder.build().unwrap();
+            let controls = Controls::from_database(&database);
+            let mut decoder = Decoder::new(controls.keys);
+            decoder.feed(&sequence[..1]);
+            assert!(decoder.decode(false).is_empty());
+            decoder.feed(&sequence[1..]);
+            assert_eq!(decoder.decode(false), [Key::F1]);
+        }
+    }
+
+    #[test]
     fn drops_unknown_control_sequences_and_paste_controls() {
         let mut decoder = decoder();
-        decoder.feed(b"\x1b[99~\x1b[200~hi\x17\x1b[A\nthere\x1b[201~\x17");
+        decoder.feed(
+            b"\x1b[99~\x1b[200~hi\x17\x1b[A\x1bOP\x1b[11~\x1b[[A\x1b[1;2P\nthere\x1b[201~\x17",
+        );
         assert_eq!(
             decoder.decode(false),
             [

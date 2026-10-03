@@ -58,6 +58,7 @@ def supervisor_binary() -> str:
 class Cell:
     text: str = " "
     foreground: Color = None
+    background: Color = None
 
 
 class Screen:
@@ -69,6 +70,7 @@ class Screen:
         self.cells = self._blank()
         self.x = self.y = 0
         self.foreground: Color = None
+        self.background: Color = None
         self.wrap = True
         self.wrap_pending = False
         self.scroll_top = 0
@@ -189,9 +191,9 @@ class Screen:
             self.wrap_pending = False
         if self.x + width > self.columns:
             return
-        self.cells[self.y][self.x] = Cell(char, self.foreground)
+        self.cells[self.y][self.x] = Cell(char, self.foreground, self.background)
         if width == 2:
-            self.cells[self.y][self.x + 1] = Cell("", self.foreground)
+            self.cells[self.y][self.x + 1] = Cell("", self.foreground, self.background)
         self.x += width
         if self.x == self.columns:
             self.x -= 1
@@ -288,19 +290,35 @@ class Screen:
             index = 0
             while index < len(values):
                 value = values[index]
-                if value in (0, 39):
+                if value == 0:
                     self.foreground = None
+                    self.background = None
+                elif value == 39:
+                    self.foreground = None
+                elif value == 49:
+                    self.background = None
                 elif 30 <= value <= 37:
                     self.foreground = ("ansi", value - 30)
                 elif 90 <= value <= 97:
                     self.foreground = ("ansi", value - 90 + 8)
-                elif value == 38 and index + 2 < len(values):
+                elif 40 <= value <= 47:
+                    self.background = ("ansi", value - 40)
+                elif 100 <= value <= 107:
+                    self.background = ("ansi", value - 100 + 8)
+                elif value in (38, 48) and index + 2 < len(values):
                     if values[index + 1] == 5:
-                        self.foreground = ("indexed", values[index + 2])
+                        color = ("indexed", values[index + 2])
                         index += 2
                     elif values[index + 1] == 2 and index + 4 < len(values):
-                        self.foreground = ("rgb", *values[index + 2 : index + 5])
+                        color = ("rgb", *values[index + 2 : index + 5])
                         index += 4
+                    else:
+                        index += 1
+                        continue
+                    if value == 38:
+                        self.foreground = color
+                    else:
+                        self.background = color
                 index += 1
 
 

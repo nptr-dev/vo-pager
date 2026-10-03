@@ -168,7 +168,7 @@ fn copy(paths: &[PathBuf], plain: bool) -> io::Result<()> {
 const HELP: &str = "vo - View Optimally\n\n\
 Usage: vo [OPTIONS] [+G|+F|+LINE] [FILE ...]\n\n\
 Read files or a stream from stdin; '-' explicitly selects stdin.\n\
-Ctrl-W toggles viewport truncation and wrapping; h shows pager keys.\n\n\
+Ctrl-W toggles viewport truncation and wrapping; F1 or ? shows pager keys.\n\n\
 Options:\n\
   -S, --chop-long-lines     Truncate long lines (default)\n\
       --wrap                Wrap at terminal display-cell boundaries\n\

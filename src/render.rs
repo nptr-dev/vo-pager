@@ -564,7 +564,19 @@ impl LineRenderer {
         if edge.width > 1 {
             self.emit_spaces(edge.width - 1, StyleState::default());
         }
-        self.emit(b">", StyleState::default());
+        let style = if self.options.color == ColorLevel::Monochrome {
+            StyleState {
+                attributes: REVERSE,
+                ..StyleState::default()
+            }
+        } else {
+            StyleState {
+                foreground: Some(Color::Rgb(32, 32, 32)),
+                background: Some(Color::Rgb(211, 211, 211)),
+                ..StyleState::default()
+            }
+        };
+        self.emit(b">", style);
     }
 
     fn next_row(&mut self) {
@@ -1275,19 +1287,55 @@ mod tests {
     }
 
     #[test]
-    fn indicators_restore_plain_style_and_do_not_retain_the_line_suffix() {
+    fn indicators_reset_source_style_and_do_not_retain_the_line_suffix() {
         let mut settings = options(4, false, ColorLevel::TrueColor);
         settings.indicators = true;
         let line = render(b"\x1b[1;31mabcdex", settings);
-        assert_eq!(line.rows, [b"\x1b[0;1;31mabc\x1b[0m>".to_vec()]);
+        assert_eq!(
+            line.rows,
+            [b"\x1b[0;1;31mabc\x1b[0;38;2;32;32;32;48;2;211;211;211m>\x1b[0m".to_vec()]
+        );
         let mut renderer = LineRenderer::new(settings, 0, 1);
         let chunk = [b'x'; 4096];
         for _ in 0..256 {
             renderer.push(&chunk);
         }
         let line = renderer.finish();
-        assert_eq!(line.rows, [b"xxx>".to_vec()]);
+        assert_eq!(
+            line.rows,
+            [b"xxx\x1b[0;38;2;32;32;32;48;2;211;211;211m>\x1b[0m".to_vec()]
+        );
         assert_eq!(line.display_width, 1_048_576);
+    }
+
+    #[test]
+    fn indicators_use_contrasting_neutral_colors_for_each_terminal_palette() {
+        for (level, marker) in [
+            (ColorLevel::None, b">".as_slice()),
+            (ColorLevel::Monochrome, b"\x1b[0;7m>\x1b[0m"),
+            (ColorLevel::Ansi8, b"\x1b[0;30;47m>\x1b[0m"),
+            (ColorLevel::Ansi16, b"\x1b[0;30;47m>\x1b[0m"),
+            (ColorLevel::Ansi256, b"\x1b[0;38;5;234;48;5;252m>\x1b[0m"),
+            (
+                ColorLevel::TrueColor,
+                b"\x1b[0;38;2;32;32;32;48;2;211;211;211m>\x1b[0m",
+            ),
+        ] {
+            let mut settings = options(1, false, level);
+            settings.indicators = true;
+            let line = render(b"\x1b[1;7;31;44mxy", settings);
+            assert_eq!(line.rows, [marker.to_vec()]);
+            assert_eq!(line.display_width, 2);
+            assert_eq!(render(b"x", settings).rows, [b"x".to_vec()]);
+        }
+        let mut settings = options(4, false, ColorLevel::TrueColor);
+        settings.indicators = true;
+        let line = render(b"\x1b[1;7;31;44mabcde", settings);
+        assert_eq!(
+            line.rows,
+            [b"\x1b[0;1;7;31;44mabc\x1b[0;38;2;32;32;32;48;2;211;211;211m>\x1b[0m".to_vec()]
+        );
+        assert_eq!(render(b"next", settings).rows, [b"next".to_vec()]);
     }
 
     #[test]

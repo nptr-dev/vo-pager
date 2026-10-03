@@ -368,21 +368,11 @@ impl Pager {
             next,
             end: offset.is_none() && next.is_none() && self.source.eof(),
         };
-        let status = if let Some(prompt) = &self.prompt {
-            format!("{}{}", prompt.label(), prompt.text)
-        } else if let Some(command) = self.command {
-            command.to_string()
-        } else if !self.prefix.is_empty() {
-            self.prefix.clone()
-        } else if !self.message.is_empty() {
-            self.message.clone()
-        } else {
-            self.source.name.clone()
-        };
         if self.config.quit_if_one_screen && !self.moved && self.page.end && self.job.is_none() {
             return Ok(());
         }
         let status = if let Some(prompt) = &self.prompt {
+            let status = format!("{}{}", prompt.label(), prompt.text);
             let prefix = clip(
                 &format!("{}{}", prompt.label(), &prompt.text[..prompt.cursor]),
                 usize::MAX,
@@ -391,11 +381,37 @@ impl Pager {
             let horizontal = caret.saturating_sub(width.saturating_sub(1));
             terminal.set_prompt_cursor(Some(caret - horizontal));
             clip_at(&status, width, horizontal)
+        } else if let Some(command) = self.command {
+            clip(&command.to_string(), width)
+        } else if !self.prefix.is_empty() {
+            clip(&self.prefix, width)
+        } else if !self.message.is_empty() {
+            clip(&self.message, width)
         } else {
-            clip(&status, width)
+            self.location_bar(width, options.width)
         };
         self.content_drawn |= !self.source.is_empty();
         terminal.draw(&self.page.rows, &status)
+    }
+
+    fn location_bar(&self, width: usize, content_width: usize) -> Vec<u8> {
+        if self.config.wrap || self.horizontal.max_width <= content_width {
+            return clip(&self.source.name, width);
+        }
+        const HINT: &[u8] = b"C-w Wrap";
+        let location_width = width.saturating_sub(HINT.len() + 1);
+        let mut status = if location_width == 0 {
+            Vec::new()
+        } else {
+            clip(&self.source.name, location_width)
+        };
+        let occupied = String::from_utf8_lossy(&status).width();
+        status.extend(std::iter::repeat_n(
+            b' ',
+            width.saturating_sub(HINT.len()).saturating_sub(occupied),
+        ));
+        status.extend_from_slice(&HINT[..HINT.len().min(width)]);
+        status
     }
 
     fn row_count(&mut self, line: u64, width: usize) -> io::Result<usize> {
@@ -565,7 +581,7 @@ impl Pager {
     fn handle(&mut self, key: Key, terminal: &mut Terminal) -> io::Result<bool> {
         self.dirty = true;
         if self.help {
-            if matches!(key, Key::Char('q' | 'Q' | 'h' | 'H') | Key::Escape) {
+            if matches!(key, Key::Char('q' | 'Q' | '?') | Key::F1 | Key::Escape) {
                 self.help = false;
             }
             return Ok(false);
@@ -687,11 +703,11 @@ impl Pager {
                 self.following = true;
                 self.job = Some(Job::End);
             }
-            Key::Left if !self.config.wrap => {
+            Key::Char('h') | Key::Left if !self.config.wrap => {
                 self.horizontal
                     .left(if explicit { count } else { width / 2 }.max(1));
             }
-            Key::Right if !self.config.wrap => {
+            Key::Char('l') | Key::Right if !self.config.wrap => {
                 self.horizontal
                     .right(if explicit { count } else { width / 2 }.max(1), width);
             }
@@ -706,7 +722,7 @@ impl Pager {
                     count.min(MAX_SEARCH_COUNT),
                 ))
             }
-            Key::Char('?') => {
+            Key::Ctrl('r') => {
                 self.prompt = Some(Prompt::new(
                     PromptKind::Backward,
                     count.min(MAX_SEARCH_COUNT),
@@ -735,7 +751,7 @@ impl Pager {
                     self.command = Some(command);
                 }
             }
-            Key::Char('h' | 'H') => self.help = true,
+            Key::F1 | Key::Char('?') => self.help = true,
             Key::Char('=') | Key::Ctrl('g') => self.message = self.info(),
             Key::Char('r' | 'R') | Key::Ctrl('l') => {
                 self.dirty = true;
@@ -1036,10 +1052,10 @@ const HELP: &str = "vo - View Optimally\n\n\
   z, w                   down/up a window (N sets window size)\n\
   g/Home, G/End           first/last line (N selects line N)\n\
   N%, Np                 jump to N percent of the input\n\
-  /regex, ?regex          search forward/backward\n\
+  /, Ctrl-R              search forward/backward\n\
   n, N                   repeat search/reverse direction\n\
   F                      follow input; Ctrl-C stops\n\
-  Left/Right             scroll horizontally (N cells)\n\
+  h/Left, l/Right         scroll left/right (N cells)\n\
   Ctrl-W, -S             toggle truncation/wrapping\n\
   -N                     toggle line numbers\n\
   mX, 'X, ''             set/jump mark X, return before jump\n\
@@ -1047,5 +1063,5 @@ const HELP: &str = "vo - View Optimally\n\n\
   =, Ctrl-G, :f          show file information\n\
   r/R/Ctrl-L             redraw; Ctrl-Z suspends\n\
   v, !command            editor, shell command\n\
-  h/H                    help\n\
+  F1, ?                  help\n\
 Numeric prefixes apply to navigation and searches.";

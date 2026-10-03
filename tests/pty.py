@@ -86,7 +86,7 @@ class PagerTerminalTests(unittest.TestCase):
         self.assertFalse(child.screen.contains("tail-marker"))
         self.assertIn("NEXT-LINE", child.screen.row(1))
         self.assertTrue(child.screen.row(0).endswith(">"))
-        self.assertEqual(child.screen.row(9), str(path)[:40])
+        self.assertEqual(child.screen.row(9), f"{str(path)[:31]:<32}C-w Wrap")
         self.send_wait(child, b"\x17", lambda screen: screen.contains("tail-marker") and "NEXT-LINE" in screen.row(2))
         self.assertEqual(child.screen.row(9), str(path)[:40])
         self.send_wait(child, b"\x17", lambda screen: not screen.contains("tail-marker") and "NEXT-LINE" in screen.row(1))
@@ -94,11 +94,50 @@ class PagerTerminalTests(unittest.TestCase):
         child.resize(100, 10)
         child.wait_for(lambda screen: "tail-marker" in screen.row(0), after_bytes=output)
         self.assertFalse(child.screen.row(0).endswith(">"))
+        self.assertEqual(child.screen.row(9), str(path))
         output = child.output_bytes
         child.resize(24, 8)
         child.wait_for(lambda screen: not screen.contains("tail-marker") and "NEXT-LINE" in screen.row(1), after_bytes=output)
         self.assertTrue(child.screen.row(0).endswith(">"))
+        self.assertTrue(child.screen.row(7).endswith("C-w Wrap"))
         self.quit(child)
+
+    def test_hjkl_scroll_help_keys_and_backward_search(self):
+        path = self.file("START-" + "0123456789" * 9 + "-END\nDOWN-LINE\nSEARCH-NEEDLE\nLAST\n")
+        child = self.pager(path, columns=40, rows=10)
+        child.wait_for(lambda screen: screen.row(0).startswith("START-"))
+        self.send_wait(child, b"6l", lambda screen: screen.row(0).startswith("0123456789"))
+        self.send_wait(child, b"6h", lambda screen: screen.row(0).startswith("START-"))
+        self.send_wait(child, b"j", lambda screen: screen.row(0) == "DOWN-LINE")
+        self.send_wait(child, b"k", lambda screen: screen.row(0).startswith("START-"))
+        self.send_wait(child, b"?", lambda screen: screen.row(0) == "vo - View Optimally")
+        self.send_wait(child, b"q", lambda screen: screen.row(0).startswith("START-"))
+        for sequence in (b"\x1bOP", b"\x1b[11~", b"\x1b[[A"):
+            self.send_wait(child, sequence, lambda screen: screen.row(0) == "vo - View Optimally")
+            self.send_wait(child, sequence, lambda screen: screen.row(0).startswith("START-"))
+        self.send_wait(child, b"3g", lambda screen: screen.row(0) == "SEARCH-NEEDLE")
+        self.send_wait(child, b"\x12START-\n", lambda screen: screen.row(0).startswith("START-"))
+        self.quit(child)
+
+    def test_truncation_indicator_has_contrasting_foreground_and_background(self):
+        path = self.file("\x1b[1;7;31;44m" + "A" * 60 + "\x1b[0m\nSECOND\n")
+        cases = [
+            ("xterm-256color", (), None, ("indexed", 234), ("indexed", 252)),
+            ("xterm-256color", (), {"COLORTERM": "truecolor"}, ("rgb", 32, 32, 32), ("rgb", 211, 211, 211)),
+            ("linux", (), None, ("ansi", 0), ("ansi", 7)),
+            ("xterm-256color", ("--color=never",), None, None, None),
+            ("xterm-256color", (), {"NO_COLOR": "1"}, None, None),
+        ]
+        for term, options, extra, foreground, background in cases:
+            with self.subTest(term=term, options=options, environment=extra):
+                child = self.pager(path, *options, columns=12, rows=5, term=term, extra=extra)
+                child.wait_for(lambda screen: screen.row(0) == "A" * 11 + ">" and screen.row(1) == "SECOND")
+                marker = child.screen.cells[0][11]
+                self.assertEqual(marker.foreground, foreground)
+                self.assertEqual(marker.background, background)
+                self.assertIsNone(child.screen.cells[1][0].background)
+                self.assertIsNone(child.screen.cells[4][0].background)
+                self.quit(child)
 
     def test_horizontal_scroll_is_bounded_by_lines_seen_offscreen_and_resize(self):
         path = self.file(
@@ -109,9 +148,11 @@ class PagerTerminalTests(unittest.TestCase):
         child = self.pager(path, columns=12, rows=4)
         child.wait_for(lambda screen: screen.row(0) == "0123456789a>" and screen.row(1) == "ABCDEFGHIJKL")
         self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "89abcdefghij")
+        self.assertTrue(child.screen.row(3).endswith("C-w Wrap"))
         self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "89abcdefghij")
         self.send_wait(child, b"999\x1b[D", lambda screen: screen.row(0) == "0123456789a>")
         self.send_wait(child, b"3j", lambda screen: screen.row(0) == "mnopqrstuvwx")
+        self.assertTrue(child.screen.row(3).endswith("C-w Wrap"))
         self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "uvwx")
         self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "uvwx")
         output = child.output_bytes
@@ -162,6 +203,7 @@ class PagerTerminalTests(unittest.TestCase):
         output = child.output_bytes
         child.resize(32, 5)
         child.wait_for(lambda screen: screen.row(0) == "0123456789abcdefghijklmnopqrst", after_bytes=output)
+        self.assertEqual(child.screen.row(4), "stdin")
         self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "0123456789abcdefghijklmnopqrst")
         self.quit(child)
 

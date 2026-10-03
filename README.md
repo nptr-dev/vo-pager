@@ -3,11 +3,13 @@
 `vo` is a Rust terminal pager for files, pipes, and FIFOs. Long lines are
 truncated to the terminal width by default. `Ctrl-W` toggles wrapping; both
 layouts are calculated by the pager and update when the terminal is resized.
-Truncated lines end with `>`. Horizontal scrolling stops at the widest line
+Truncated lines end with `>` on a light-grey background with a dark foreground,
+downgraded to the terminal's palette. Horizontal scrolling stops at the widest line
 encountered in the current input, including lines no longer on screen. The
 limit adjusts with terminal width and incoming stream data. The bottom bar
-shows only the file path, or `stdin`, except while entering a command or showing
-a message.
+shows the file path, or `stdin`. In truncation mode, `C-w Wrap` appears when an
+encountered line exceeds the available content width. Commands and messages
+temporarily replace the bar.
 
 Build or install with Rust 1.88 or newer:
 
@@ -26,7 +28,7 @@ to another process or file is copied byte for byte. `TERM=dumb`, unknown
 terminal entries, and entries without cursor positioning use a plain-text
 fallback with document escape sequences removed.
 
-The viewing commands keep their usual less bindings:
+The viewing commands use less and vi bindings:
 
 | Keys | Action |
 | --- | --- |
@@ -37,16 +39,16 @@ The viewing commands keep their usual less bindings:
 | `z` / `w` | Down / up a window; a numeric prefix sets its size |
 | `g`, `<`, Home / `G`, `>`, End | First / last screen; a numeric prefix selects a line |
 | `N%`, `Np` | Jump to N percent of the input bytes |
-| `/regex` / `?regex` | Search forward / backward |
+| `/regex` / Ctrl-R, then `regex` | Search forward / backward |
 | `n` / `N` | Repeat search / reverse search direction |
 | `F`, Ctrl-C | Follow new input / stop following or cancel work |
-| Left / Right | Scroll horizontally; a prefix sets the distance in cells |
+| `h`, Left / `l`, Right | Scroll left / right; a prefix sets the distance in cells |
 | `mX`, `'X`, `''` | Set mark X, jump to it, return before a jump |
 | `:n`, `:p`, `:e` | Next file, previous file, examine another file |
 | `=`, Ctrl-G, `:f` | File information |
 | `r`, `R`, Ctrl-L / Ctrl-Z | Redraw / suspend |
 | `v`, `!command` | Invoke the editor / a shell command |
-| `h`, `H` | Help |
+| F1, `?` | Help |
 | Ctrl-W, `-S` | Toggle truncation and wrapping |
 | `-N` | Toggle line numbers |
 
