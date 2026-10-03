@@ -5,6 +5,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColorLevel {
     None,
+    Monochrome,
     Ansi8,
     Ansi16,
     Ansi256,
@@ -717,6 +718,12 @@ impl StyleState {
     }
 
     fn for_level(mut self, level: ColorLevel) -> Self {
+        if level == ColorLevel::Monochrome {
+            self.foreground = None;
+            self.background = None;
+            self.underline = None;
+            return self;
+        }
         self.foreground = self.foreground.map(|color| color.for_level(level));
         self.background = self.background.map(|color| color.for_level(level));
         self.underline = if matches!(level, ColorLevel::Ansi8 | ColorLevel::Ansi16) {
@@ -983,6 +990,8 @@ mod tests {
         assert_eq!(line.rows, [b"\x1b[0;38;5;196mx\x1b[0m".to_vec()]);
         let line = render(b"\x1b[1;31mx", options(8, true, ColorLevel::None));
         assert_eq!(line.rows, [b"x".to_vec()]);
+        let line = render(b"\x1b[1;31mx", options(8, true, ColorLevel::Monochrome));
+        assert_eq!(line.rows, [b"\x1b[0;1mx\x1b[0m".to_vec()]);
     }
 
     #[test]

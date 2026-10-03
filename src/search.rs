@@ -28,6 +28,7 @@ pub struct Search {
     remaining: usize,
     backward_matches: VecDeque<u64>,
     backward: bool,
+    skip_partial: bool,
 }
 
 pub enum Progress {
@@ -79,14 +80,23 @@ impl Search {
         forward: bool,
         count: usize,
     ) -> io::Result<Self> {
+        let next_line = if source.is_empty() {
+            0
+        } else {
+            line.saturating_add(1)
+        };
+        let next_offset = if forward {
+            source.line_offset(next_line)?
+        } else {
+            None
+        };
+        let skip_partial = forward
+            && next_offset.is_none()
+            && !source.is_empty()
+            && !source.eof()
+            && source.block(source.len() - 1)?[0] != b'\n';
         let (offset, first_line, stop) = if forward {
-            (
-                source
-                    .line_offset(line.saturating_add(1))?
-                    .unwrap_or(source.len()),
-                line.saturating_add(1),
-                None,
-            )
+            (next_offset.unwrap_or(source.len()), next_line, None)
         } else {
             (
                 0,
@@ -106,6 +116,7 @@ impl Search {
             remaining: count.max(1),
             backward_matches: VecDeque::new(),
             backward: !forward,
+            skip_partial,
         })
     }
 
@@ -132,15 +143,24 @@ impl Search {
         let count = bytes.len().min((end - self.offset) as usize);
         for byte in &bytes[..count] {
             self.offset += 1;
+            // A stream may still be extending the current line. Start after its LF.
+            if self.skip_partial {
+                if *byte == b'\n' {
+                    self.skip_partial = false;
+                }
+                continue;
+            }
             if *byte == b'\n' {
                 if let Some(line) = self.finish_line() {
                     return Ok(Progress::Found(line));
                 }
                 self.line += 1;
-            } else if self.visible.push(*byte) && *byte != b'\r' {
+            } else {
                 self.started = true;
-                self.state = self.pattern.dfa.next_state(self.state, *byte);
-                self.matched |= self.pattern.dfa.is_match_state(self.state);
+                if self.visible.push(*byte) && *byte != b'\r' {
+                    self.state = self.pattern.dfa.next_state(self.state, *byte);
+                    self.matched |= self.pattern.dfa.is_match_state(self.state);
+                }
             }
         }
         Ok(Progress::More)
@@ -173,7 +193,10 @@ impl Search {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
     use std::io::Write;
+    use std::os::fd::OwnedFd;
+    use std::os::unix::net::UnixStream;
 
     fn find(bytes: &[u8], expression: &str, line: u64, forward: bool) -> Option<u64> {
         let mut file = tempfile::NamedTempFile::new().unwrap();
@@ -206,5 +229,29 @@ mod tests {
         assert_eq!(find(bytes, "^prefix$", 0, true), Some(1));
         assert_eq!(find(bytes, "^fix$", 0, true), None);
         assert_eq!(find(bytes, "first", 2, false), Some(0));
+    }
+
+    #[test]
+    fn stream_search_skips_the_unfinished_current_line_and_handles_empty_input() {
+        for initial in [b"first-partial".as_slice(), b""] {
+            let (reader, mut writer) = UnixStream::pair().unwrap();
+            let mut source =
+                Source::stream(File::from(OwnedFd::from(reader)), "stream".into()).unwrap();
+            if !initial.is_empty() {
+                writer.write_all(initial).unwrap();
+                source.ingest().unwrap();
+            }
+            let pattern = Pattern::compile("^needle$".into(), true, false).unwrap();
+            let mut search = Search::new(&mut source, pattern, 0, true, 1).unwrap();
+            assert!(matches!(
+                search.step(&mut source).unwrap(),
+                Progress::Waiting
+            ));
+            writer.write_all(b"needle\nOTHER\nneedle\n").unwrap();
+            source.ingest().unwrap();
+            assert!(
+                matches!(search.step(&mut source).unwrap(), Progress::Found(line) if line == if initial.is_empty() { 0 } else { 2 })
+            );
+        }
     }
 }

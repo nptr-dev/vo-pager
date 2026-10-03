@@ -56,7 +56,8 @@ size limits; numeric search counts are capped at 10,000.
 `-F`, `-X`, `-R`, and `-x`. SGR (Select Graphic Rendition) styles are handled
 by default. Terminal capabilities come from the terminfo database and
 `COLORTERM`. RGB and indexed colors are downgraded to the terminal's 256-,
-16-, or 8-color palette. `NO_COLOR` and `--color=never` suppress document SGR;
+16-, or 8-color palette. Monochrome terminals retain attributes while dropping
+colors. `NO_COLOR` and `--color=never` suppress document SGR;
 `--color=always` overrides `NO_COLOR` while retaining the detected palette.
 Cursor movement, erasure, OSC, DCS, and other document control sequences are
 discarded. Each logical line starts with default attributes, as with less `-R`.

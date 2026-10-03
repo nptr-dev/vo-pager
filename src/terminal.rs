@@ -157,8 +157,10 @@ impl Capabilities {
             || matches!(database.raw("Tc"), Some(Value::True))
             || matches!(database.raw("RGB"), Some(Value::True))
             || colors >= 1 << 24;
-        let color = if !style || !ansi_color {
+        let color = if !style {
             ColorLevel::None
+        } else if !ansi_color {
+            ColorLevel::Monochrome
         } else if true_color {
             ColorLevel::TrueColor
         } else if colors >= 256 {
@@ -168,7 +170,7 @@ impl Capabilities {
         } else if colors >= 8 {
             ColorLevel::Ansi8
         } else {
-            ColorLevel::None
+            ColorLevel::Monochrome
         };
         let usable = cursor_works && !controls.clear_line.is_empty();
         Self {
@@ -899,8 +901,8 @@ mod tests {
     #[test]
     fn detects_declared_palettes_and_truecolor_environment() {
         for (colors, expected) in [
-            (0, ColorLevel::None),
-            (7, ColorLevel::None),
+            (0, ColorLevel::Monochrome),
+            (7, ColorLevel::Monochrome),
             (8, ColorLevel::Ansi8),
             (16, ColorLevel::Ansi16),
             (256, ColorLevel::Ansi256),

@@ -95,6 +95,19 @@ class PagerTerminalTests(unittest.TestCase):
         child.wait_for(lambda screen: not screen.contains("tail-marker") and "NEXT-LINE" in screen.row(1), after_bytes=output)
         self.quit(child)
 
+    def test_switching_files_restores_stream_history_and_file_position(self):
+        path = self.file("FILE-FIRST\nFILE-LAST\n")
+        reader, writer = os.pipe()
+        os.write(writer, b"STREAM-FIRST\nSTREAM-LAST\n")
+        os.close(writer)
+        child = self.pager(path, "-", stdin_fd=reader)
+        child.wait_for(lambda screen: "STREAM-FIRST" in screen.row(0))
+        self.send_wait(child, b":n", lambda screen: "FILE-FIRST" in screen.row(0))
+        self.send_wait(child, b"2g", lambda screen: "FILE-LAST" in screen.row(0))
+        self.send_wait(child, b":p", lambda screen: "STREAM-FIRST" in screen.row(0))
+        self.send_wait(child, b":n", lambda screen: "FILE-LAST" in screen.row(0))
+        self.quit(child)
+
     def test_open_pipe_is_interactive_and_quits_before_eof(self):
         reader, writer = os.pipe()
         self.addCleanup(os.close, writer)

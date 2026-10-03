@@ -70,7 +70,7 @@ impl Source {
         Self::stream(input, "stdin".into())
     }
 
-    fn stream(input: File, name: String) -> io::Result<Self> {
+    pub(crate) fn stream(input: File, name: String) -> io::Result<Self> {
         Ok(Self::new(
             tempfile::tempfile()?,
             Input::Stream(input),

@@ -99,6 +99,7 @@ struct Pager {
     half_window: Option<usize>,
     dirty: bool,
     moved: bool,
+    content_drawn: bool,
 }
 
 pub fn run(paths: Vec<PathBuf>, config: Config, capabilities: Capabilities) -> io::Result<()> {
@@ -128,6 +129,7 @@ pub fn run(paths: Vec<PathBuf>, config: Config, capabilities: Capabilities) -> i
         half_window: None,
         dirty: true,
         moved: false,
+        content_drawn: false,
     };
     pager.source.scan_step()?;
     if let Some(command) = initial {
@@ -140,7 +142,8 @@ pub fn run(paths: Vec<PathBuf>, config: Config, capabilities: Capabilities) -> i
             || matches!(&pager.job, Some(Job::Search(search)) if search.ready(&pager.source));
         let timeout = if work_ready
             || pager.dirty
-                && (last_frame.elapsed() >= FRAME_INTERVAL
+                && (!pager.content_drawn
+                    || last_frame.elapsed() >= FRAME_INTERVAL
                     || pager.job.is_none() && pager.source.eof())
         {
             0
@@ -179,7 +182,9 @@ pub fn run(paths: Vec<PathBuf>, config: Config, capabilities: Capabilities) -> i
         let height = height.saturating_sub(1).max(1);
         pager.work(width, height)?;
         if pager.dirty
-            && (last_frame.elapsed() >= FRAME_INTERVAL || pager.job.is_none() && pager.source.eof())
+            && (!pager.content_drawn
+                || last_frame.elapsed() >= FRAME_INTERVAL
+                || pager.job.is_none() && pager.source.eof())
         {
             pager.draw(&mut terminal)?;
             last_frame = Instant::now();
@@ -355,7 +360,10 @@ impl Pager {
             };
             format!(
                 "vo{end} | {}-{last} | {mode} | {}{progress}",
-                self.top.line + 1,
+                self.page
+                    .positions
+                    .first()
+                    .map_or(0, |position| position.line + 1),
                 self.source.name
             )
         };
@@ -374,6 +382,7 @@ impl Pager {
         } else {
             clip(&status, width)
         };
+        self.content_drawn |= !self.source.is_empty();
         terminal.draw(&self.page.rows, &status)
     }
 
@@ -778,6 +787,7 @@ impl Pager {
                     },
                 );
                 self.current = index;
+                self.content_drawn = false;
                 self.top = history
                     .as_ref()
                     .map_or(Position::default(), |entry| entry.top);
