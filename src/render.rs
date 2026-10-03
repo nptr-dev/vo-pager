@@ -19,6 +19,7 @@ pub struct RenderOptions {
     pub wrap: bool,
     pub tabstop: usize,
     pub color: ColorLevel,
+    pub indicators: bool,
 }
 
 /// SGR state can be carried explicitly between lines. `new` starts from defaults.
@@ -35,6 +36,7 @@ pub struct RenderedLine {
     pub total_rows: usize,
     pub truncated: bool,
     pub style: StyleState,
+    pub display_width: usize,
 }
 
 /// Incrementally renders one logical line, retaining only the requested rows.
@@ -64,6 +66,7 @@ pub struct LineRenderer {
     utf8_expected: usize,
     ended: bool,
     truncated: bool,
+    edge: Option<EdgeCell>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,6 +92,13 @@ struct Cell {
     width: usize,
     scalars: usize,
     style: StyleState,
+}
+
+#[derive(Clone, Copy)]
+struct EdgeCell {
+    start: usize,
+    width: usize,
+    preceding_style: StyleState,
 }
 
 const BOLD: u16 = 1 << 0;
@@ -136,6 +146,7 @@ impl LineRenderer {
             utf8_expected: 0,
             ended: false,
             truncated: false,
+            edge: None,
         }
     }
 
@@ -167,7 +178,7 @@ impl LineRenderer {
     }
 
     /// True when no further bytes can change the requested viewport.
-    /// If input processing stops here, `total_rows` is a lower bound.
+    /// If input processing stops here, `total_rows` and `display_width` are lower bounds.
     pub fn viewport_full(&self) -> bool {
         if self.first_row == self.end_row {
             return true;
@@ -184,12 +195,19 @@ impl LineRenderer {
             self.character('\u{fffd}');
         }
         self.flush_cell();
+        if self.options.indicators
+            && !self.options.wrap
+            && self.logical_column > self.options.horizontal.saturating_add(self.options.width)
+        {
+            self.indicator();
+        }
         self.finish_row();
         RenderedLine {
             rows: self.rows,
             total_rows: self.row.saturating_add(1),
             truncated: self.truncated,
             style: self.style,
+            display_width: self.logical_column,
         }
     }
 
@@ -399,6 +417,7 @@ impl LineRenderer {
         let Some(mut cell) = self.pending.take() else {
             return;
         };
+        let logical_width = cell.width;
         if self.options.wrap && cell.width > self.options.width {
             cell = Cell::new('\u{fffd}', cell.style);
             self.truncated = true;
@@ -418,6 +437,13 @@ impl LineRenderer {
             let cell_end = self.column.saturating_add(cell.width);
             if self.column >= self.options.horizontal && cell_end <= end && self.column < end {
                 if self.selected() {
+                    if self.options.indicators && cell.width != 0 && cell_end == end {
+                        self.edge = Some(EdgeCell {
+                            start: self.output.len(),
+                            width: cell.width,
+                            preceding_style: self.emitted_style,
+                        });
+                    }
                     self.emit(cell.text(), cell.style);
                 }
             } else {
@@ -426,12 +452,12 @@ impl LineRenderer {
                     .min(end)
                     .saturating_sub(self.column.max(self.options.horizontal));
                 if self.selected() && visible != 0 {
-                    self.emit_spaces(visible, cell.style);
+                    self.chop_span(None, visible, cell.style, cell_end >= end);
                 }
             }
         }
         self.column = self.column.saturating_add(cell.width);
-        self.logical_column = self.logical_column.saturating_add(cell.width);
+        self.logical_column = self.logical_column.saturating_add(logical_width);
     }
 
     fn span(&mut self, bytes: Option<&[u8]>, count: usize, style: StyleState) {
@@ -449,11 +475,12 @@ impl LineRenderer {
             let end_offset = end.saturating_sub(self.column).min(count);
             self.truncated |= start_offset != 0 || end_offset != count;
             if self.selected() && start_offset < end_offset {
-                if let Some(bytes) = bytes {
-                    self.emit(&bytes[start_offset..end_offset], style);
-                } else {
-                    self.emit_spaces(end_offset - start_offset, style);
-                }
+                self.chop_span(
+                    bytes.map(|bytes| &bytes[start_offset..end_offset]),
+                    end_offset - start_offset,
+                    style,
+                    self.column.saturating_add(end_offset) == end,
+                );
             }
             self.column = self.column.saturating_add(count);
             return;
@@ -493,6 +520,51 @@ impl LineRenderer {
 
     fn selected(&self) -> bool {
         self.row >= self.first_row && self.row < self.end_row
+    }
+
+    fn chop_span(
+        &mut self,
+        bytes: Option<&[u8]>,
+        count: usize,
+        style: StyleState,
+        reaches_edge: bool,
+    ) {
+        let prefix = if self.options.indicators && reaches_edge {
+            count - 1
+        } else {
+            count
+        };
+        if prefix != 0 {
+            if let Some(bytes) = bytes {
+                self.emit(&bytes[..prefix], style);
+            } else {
+                self.emit_spaces(prefix, style);
+            }
+        }
+        if prefix != count {
+            self.edge = Some(EdgeCell {
+                start: self.output.len(),
+                width: 1,
+                preceding_style: self.emitted_style,
+            });
+            if let Some(bytes) = bytes {
+                self.emit(&bytes[prefix..], style);
+            } else {
+                self.emit_spaces(1, style);
+            }
+        }
+    }
+
+    fn indicator(&mut self) {
+        let Some(edge) = self.edge else {
+            return;
+        };
+        self.output.truncate(edge.start);
+        self.emitted_style = edge.preceding_style;
+        if edge.width > 1 {
+            self.emit_spaces(edge.width - 1, StyleState::default());
+        }
+        self.emit(b">", StyleState::default());
     }
 
     fn next_row(&mut self) {
@@ -904,6 +976,7 @@ mod tests {
             wrap,
             tabstop: 8,
             color,
+            indicators: false,
         }
     }
 
@@ -1116,6 +1189,105 @@ mod tests {
         let line = renderer.finish();
         assert!(line.rows.is_empty());
         assert_eq!(line.total_rows, 1);
+    }
+
+    #[test]
+    fn truncation_indicator_requires_content_beyond_the_right_edge() {
+        let mut settings = options(12, false, ColorLevel::None);
+        settings.indicators = true;
+        let line = render(b"0123456789abcdefghij", settings);
+        assert_eq!(line.rows, [b"0123456789a>".to_vec()]);
+        assert_eq!(line.display_width, 20);
+        let line = render(b"0123456789ab", settings);
+        assert_eq!(line.rows, [b"0123456789ab".to_vec()]);
+        assert!(!line.truncated);
+        settings.horizontal = 8;
+        let line = render(b"0123456789abcdefghij", settings);
+        assert_eq!(line.rows, [b"89abcdefghij".to_vec()]);
+        settings.horizontal = 9;
+        let line = render(b"0123456789abcdefghij", settings);
+        assert_eq!(line.rows, [b"9abcdefghij".to_vec()]);
+        settings.horizontal = 2;
+        let line = render(b"0123456789abcdefghij", settings);
+        assert_eq!(line.rows, [b"23456789abc>".to_vec()]);
+    }
+
+    #[test]
+    fn indicators_replace_whole_unicode_cells_and_fit_one_column() {
+        let mut settings = options(4, false, ColorLevel::None);
+        settings.indicators = true;
+        let line = render("ab\u{754c}\u{0301}x".as_bytes(), settings);
+        assert_eq!(line.rows, [b"ab >".to_vec()]);
+        assert_eq!(line.display_width, 5);
+        let line = render("abc\u{754c}".as_bytes(), settings);
+        assert_eq!(line.rows, [b"abc>".to_vec()]);
+        let line = render("abcd\u{0301}x".as_bytes(), settings);
+        assert_eq!(line.rows, [b"abc>".to_vec()]);
+        settings.width = 1;
+        for text in ["xy", "\u{754c}", "\u{1f469}\u{200d}\u{1f4bb}"] {
+            let line = render(text.as_bytes(), settings);
+            assert_eq!(line.rows, [b">".to_vec()]);
+        }
+        assert_eq!(render(b"x", settings).rows, [b"x".to_vec()]);
+        settings.horizontal = 1;
+        let line = render("\u{754c}".as_bytes(), settings);
+        assert_eq!(line.rows, [b" ".to_vec()]);
+        settings.wrap = true;
+        settings.horizontal = 0;
+        let line = render("\u{754c}\u{754c}".as_bytes(), settings);
+        assert_eq!(line.display_width, 4);
+        assert_eq!(
+            line.rows,
+            [
+                "\u{fffd}".as_bytes().to_vec(),
+                "\u{fffd}".as_bytes().to_vec()
+            ]
+        );
+    }
+
+    #[test]
+    fn tab_width_and_indicator_are_independent_of_chunk_boundaries() {
+        let mut settings = options(8, false, ColorLevel::None);
+        settings.indicators = true;
+        let line = render(b"a\tb", settings);
+        assert_eq!(line.rows, [b"a      >".to_vec()]);
+        assert_eq!(line.display_width, 9);
+        assert_eq!(render(b"a\t", settings).rows, [b"a       ".to_vec()]);
+        settings.horizontal = 1;
+        assert_eq!(render(b"a\tb", settings).rows, [b"       b".to_vec()]);
+        settings.horizontal = 0;
+        settings.width = 4;
+        settings.color = ColorLevel::TrueColor;
+        let bytes = "\u{1b}[31mab\u{754c}\u{0301}x\u{1b}[0m\t".as_bytes();
+        let expected = render(bytes, settings);
+        assert_eq!(plain(&expected.rows[0]), "ab >");
+        assert_eq!(expected.display_width, 8);
+        for size in 1..=bytes.len() {
+            let mut renderer = LineRenderer::new(settings, 0, 1);
+            for chunk in bytes.chunks(size) {
+                renderer.push(chunk);
+            }
+            let line = renderer.finish();
+            assert_eq!(line.rows, expected.rows);
+            assert_eq!(line.display_width, expected.display_width);
+        }
+        assert_eq!(render(b"\x1b[31mx\x08x\x1b[0m", settings).display_width, 1);
+    }
+
+    #[test]
+    fn indicators_restore_plain_style_and_do_not_retain_the_line_suffix() {
+        let mut settings = options(4, false, ColorLevel::TrueColor);
+        settings.indicators = true;
+        let line = render(b"\x1b[1;31mabcdex", settings);
+        assert_eq!(line.rows, [b"\x1b[0;1;31mabc\x1b[0m>".to_vec()]);
+        let mut renderer = LineRenderer::new(settings, 0, 1);
+        let chunk = [b'x'; 4096];
+        for _ in 0..256 {
+            renderer.push(&chunk);
+        }
+        let line = renderer.finish();
+        assert_eq!(line.rows, [b"xxx>".to_vec()]);
+        assert_eq!(line.display_width, 1_048_576);
     }
 
     #[test]

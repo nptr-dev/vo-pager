@@ -182,8 +182,12 @@ def measure(executable: str, name: str, corpus: dict, source: str, timeout: floa
         )
         output_bytes = process.output_bytes
         scan_start_ns = process.send(b"G")
-        eof_ns = process.wait_for(
-            lambda screen: screen.contains(corpus["end_marker"]) and "(END)" in screen.row(screen.rows - 1),
+        scan_end_ns = process.wait_for(
+            lambda screen: screen.contains(corpus["end_marker"]) and (
+                "(END)" in screen.row(screen.rows - 1)
+                if name == "less"
+                else bool(screen.row(screen.rows - 1).strip())
+            ),
             timeout,
             after_bytes=output_bytes,
         )
@@ -196,8 +200,8 @@ def measure(executable: str, name: str, corpus: dict, source: str, timeout: floa
         if producer:
             producer.join()
         startup_seconds = (startup_ns - process.start_ns) / 1e9
-        scan_seconds = (eof_ns - scan_start_ns) / 1e9
-        end_to_end_seconds = (eof_ns - process.start_ns) / 1e9
+        scan_seconds = (scan_end_ns - scan_start_ns) / 1e9
+        end_to_end_seconds = (scan_end_ns - process.start_ns) / 1e9
         return {
             "pager": name,
             "corpus": corpus["kind"],
@@ -328,9 +332,9 @@ def run(args):
             "repeats": args.repeat,
             "timeout_seconds": args.timeout,
             "rss": "native supervisor wait4 pager child ru_maxrss; bytes; stream producer is a Python parent thread",
-            "startup_end": "first boundary marker rendered and last-row prompt nonempty",
+            "startup_end": "first corpus marker rendered and last-row source location (vo) or prompt (less) nonempty",
             "scan_start": "immediately before sending G to the controlling PTY",
-            "scan_end": "EOF boundary marker rendered and last-row prompt contains (END)",
+            "scan_end": "final corpus marker rendered; vo: last-row source location nonempty; less: last-row prompt contains (END)",
             "end_to_end": "posix_spawn start to scan end; excludes corpus generation and cache warming",
         },
         "corpora": corpora,

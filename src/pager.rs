@@ -38,6 +38,33 @@ struct Position {
     row: usize,
 }
 
+#[derive(Clone, Copy, Default)]
+struct HorizontalScroll {
+    offset: usize,
+    max_width: usize,
+}
+
+impl HorizontalScroll {
+    fn observe(&mut self, width: usize) {
+        self.max_width = self.max_width.max(width);
+    }
+
+    fn clamp(&mut self, width: usize) {
+        self.offset = self.offset.min(self.max_width.saturating_sub(width));
+    }
+
+    fn right(&mut self, count: usize, width: usize) {
+        self.offset = self
+            .offset
+            .saturating_add(count)
+            .min(self.max_width.saturating_sub(width));
+    }
+
+    fn left(&mut self, count: usize) {
+        self.offset = self.offset.saturating_sub(count);
+    }
+}
+
 #[derive(Default)]
 struct Page {
     rows: Vec<Vec<u8>>,
@@ -73,7 +100,7 @@ struct History {
     top: Position,
     previous: Position,
     marks: [Option<Position>; 128],
-    horizontal: usize,
+    horizontal: HorizontalScroll,
 }
 
 struct Pager {
@@ -86,7 +113,7 @@ struct Pager {
     previous: Position,
     page: Page,
     marks: [Option<Position>; 128],
-    horizontal: usize,
+    horizontal: HorizontalScroll,
     prefix: String,
     command: Option<char>,
     prompt: Option<Prompt>,
@@ -116,7 +143,7 @@ pub fn run(paths: Vec<PathBuf>, config: Config, capabilities: Capabilities) -> i
         previous: Position::default(),
         page: Page::default(),
         marks: [None; 128],
-        horizontal: 0,
+        horizontal: HorizontalScroll::default(),
         prefix: String::new(),
         command: None,
         prompt: None,
@@ -227,10 +254,11 @@ impl Pager {
     fn options(&self, width: usize) -> RenderOptions {
         RenderOptions {
             width: width.max(1),
-            horizontal: self.horizontal,
+            horizontal: self.horizontal.offset,
             wrap: self.config.wrap,
             tabstop: self.config.tabstop,
             color: self.config.color,
+            indicators: true,
         }
     }
 
@@ -270,6 +298,8 @@ impl Pager {
             );
         }
         let number_width = self.number_width(width, height);
+        self.horizontal
+            .clamp(width.saturating_sub(number_width).max(1));
         let options = self.options(width.saturating_sub(number_width));
         let mut rows = Vec::with_capacity(height);
         let mut positions = Vec::with_capacity(height);
@@ -288,9 +318,10 @@ impl Pager {
             let mut renderer = LineRenderer::new(options, position.row, remaining + 1);
             let after = self.source.visit_line(start, |bytes| {
                 renderer.push(bytes);
-                !renderer.viewport_full()
+                !options.wrap || !renderer.viewport_full()
             })?;
             let rendered = renderer.finish();
+            self.horizontal.observe(rendered.display_width);
             let continuing = rendered.rows.len() > remaining;
             let visible = rendered.rows.len().min(remaining);
             for (index, mut row) in rendered.rows.into_iter().take(visible).enumerate() {
@@ -346,26 +377,7 @@ impl Pager {
         } else if !self.message.is_empty() {
             self.message.clone()
         } else {
-            let end = if self.page.end { " (END)" } else { "" };
-            let last = self.page.positions.last().map_or(0, |pos| pos.line + 1);
-            let mode = if self.config.wrap { "wrap" } else { "truncate" };
-            let progress = if self.following {
-                " | following (Ctrl-C stops)"
-            } else if self.job.is_some() {
-                " | reading (Ctrl-C stops)"
-            } else if !self.source.eof() {
-                " | stream"
-            } else {
-                ""
-            };
-            format!(
-                "vo{end} | {}-{last} | {mode} | {}{progress}",
-                self.page
-                    .positions
-                    .first()
-                    .map_or(0, |position| position.line + 1),
-                self.source.name
-            )
+            self.source.name.clone()
         };
         if self.config.quit_if_one_screen && !self.moved && self.page.end && self.job.is_none() {
             return Ok(());
@@ -398,7 +410,9 @@ impl Pager {
             renderer.push(bytes);
             true
         })?;
-        Ok(renderer.finish().total_rows.max(1))
+        let rendered = renderer.finish();
+        self.horizontal.observe(rendered.display_width);
+        Ok(rendered.total_rows.max(1))
     }
 
     fn move_up(&mut self, count: usize, width: usize) -> io::Result<()> {
@@ -673,15 +687,13 @@ impl Pager {
                 self.following = true;
                 self.job = Some(Job::End);
             }
-            Key::Left => {
-                self.horizontal = self
-                    .horizontal
-                    .saturating_sub(if explicit { count } else { width / 2 }.max(1))
+            Key::Left if !self.config.wrap => {
+                self.horizontal
+                    .left(if explicit { count } else { width / 2 }.max(1));
             }
-            Key::Right => {
-                self.horizontal = self
-                    .horizontal
-                    .saturating_add(if explicit { count } else { width / 2 }.max(1))
+            Key::Right if !self.config.wrap => {
+                self.horizontal
+                    .right(if explicit { count } else { width / 2 }.max(1), width);
             }
             Key::Escape | Key::Ctrl('c') => self.message = "Interrupted".into(),
             Key::Ctrl('w') => {
@@ -793,7 +805,9 @@ impl Pager {
                     .map_or(Position::default(), |entry| entry.top);
                 self.previous = history.as_ref().map_or(self.top, |entry| entry.previous);
                 self.marks = history.as_ref().map_or([None; 128], |entry| entry.marks);
-                self.horizontal = history.as_ref().map_or(0, |entry| entry.horizontal);
+                self.horizontal = history
+                    .as_ref()
+                    .map_or(HorizontalScroll::default(), |entry| entry.horizontal);
                 self.page = Page::default();
             }
             Err(error) => {
@@ -1000,6 +1014,7 @@ fn clip_at(text: &str, width: usize, horizontal: usize) -> Vec<u8> {
             wrap: false,
             tabstop: 8,
             color: ColorLevel::None,
+            indicators: false,
         },
         0,
         1,

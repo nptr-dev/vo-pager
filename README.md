@@ -3,6 +3,11 @@
 `vo` is a Rust terminal pager for files, pipes, and FIFOs. Long lines are
 truncated to the terminal width by default. `Ctrl-W` toggles wrapping; both
 layouts are calculated by the pager and update when the terminal is resized.
+Truncated lines end with `>`. Horizontal scrolling stops at the widest line
+encountered in the current input, including lines no longer on screen. The
+limit adjusts with terminal width and incoming stream data. The bottom bar
+shows only the file path, or `stdin`, except while entering a command or showing
+a message.
 
 Build or install with Rust 1.88 or newer:
 

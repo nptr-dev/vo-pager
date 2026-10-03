@@ -75,7 +75,7 @@ class PagerTerminalTests(unittest.TestCase):
         self.send_wait(child, b"/needle-unique\n", lambda screen: screen.contains("line-0070"))
         self.send_wait(child, b"n", lambda screen: screen.contains("line-0140"))
         self.send_wait(child, b"N", lambda screen: screen.contains("line-0070"))
-        self.send_wait(child, b"G", lambda screen: screen.contains("line-0199") and "(END)" in screen.row(screen.rows - 1))
+        self.send_wait(child, b"G", lambda screen: screen.contains("line-0199") and screen.row(screen.rows - 1) == str(path)[:screen.columns])
         self.send_wait(child, b"g", lambda screen: "line-0000" in screen.row(0))
         self.quit(child)
 
@@ -85,14 +85,84 @@ class PagerTerminalTests(unittest.TestCase):
         child.wait_for(lambda screen: screen.contains("NEXT-LINE"))
         self.assertFalse(child.screen.contains("tail-marker"))
         self.assertIn("NEXT-LINE", child.screen.row(1))
+        self.assertTrue(child.screen.row(0).endswith(">"))
+        self.assertEqual(child.screen.row(9), str(path)[:40])
         self.send_wait(child, b"\x17", lambda screen: screen.contains("tail-marker") and "NEXT-LINE" in screen.row(2))
+        self.assertEqual(child.screen.row(9), str(path)[:40])
         self.send_wait(child, b"\x17", lambda screen: not screen.contains("tail-marker") and "NEXT-LINE" in screen.row(1))
         output = child.output_bytes
         child.resize(100, 10)
         child.wait_for(lambda screen: "tail-marker" in screen.row(0), after_bytes=output)
+        self.assertFalse(child.screen.row(0).endswith(">"))
         output = child.output_bytes
         child.resize(24, 8)
         child.wait_for(lambda screen: not screen.contains("tail-marker") and "NEXT-LINE" in screen.row(1), after_bytes=output)
+        self.assertTrue(child.screen.row(0).endswith(">"))
+        self.quit(child)
+
+    def test_horizontal_scroll_is_bounded_by_lines_seen_offscreen_and_resize(self):
+        path = self.file(
+            "0123456789abcdefghij\nABCDEFGHIJKL\nabcdefghijkl\n"
+            "mnopqrstuvwx\nXYZabcdefghij\nSHORT\n"
+            "0123456789ABCDEFGHIJKLMNOPQRST\n"
+        )
+        child = self.pager(path, columns=12, rows=4)
+        child.wait_for(lambda screen: screen.row(0) == "0123456789a>" and screen.row(1) == "ABCDEFGHIJKL")
+        self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "89abcdefghij")
+        self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "89abcdefghij")
+        self.send_wait(child, b"999\x1b[D", lambda screen: screen.row(0) == "0123456789a>")
+        self.send_wait(child, b"3j", lambda screen: screen.row(0) == "mnopqrstuvwx")
+        self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "uvwx")
+        self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "uvwx")
+        output = child.output_bytes
+        child.resize(18, 4)
+        child.wait_for(lambda screen: screen.row(0) == "opqrstuvwx", after_bytes=output)
+        self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "opqrstuvwx")
+        output = child.output_bytes
+        child.resize(8, 4)
+        child.wait_for(lambda screen: screen.row(0) == "opqrstu>", after_bytes=output)
+        self.send_wait(child, b"999\x1b[C", lambda screen: not screen.row(0))
+        self.send_wait(child, b"g", lambda screen: screen.row(0) == "cdefghij")
+        self.send_wait(child, b"G", lambda screen: screen.contains("CDEFGHI>"))
+        self.send_wait(child, b"999\x1b[C", lambda screen: screen.contains("MNOPQRST"))
+        self.send_wait(child, b"999\x1b[C", lambda screen: screen.contains("MNOPQRST"))
+        self.quit(child)
+
+    def test_horizontal_limits_count_ansi_and_unicode_cells_per_file(self):
+        path = self.file("\x1b[31m" + "\u754c" * 8 + "abcd\x1b[0m\n")
+        short = Path(self.temporary.name) / "short.txt"
+        short.write_text("FIRST\nLAST\n", encoding="ascii")
+        child = self.pager(path, str(short), columns=12, rows=5)
+        child.wait_for(lambda screen: screen.row(0) == "FIRST")
+        self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "FIRST")
+        self.send_wait(child, b":n", lambda screen: screen.row(0) == "\u754c" * 5 + " >")
+        self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "\u754c" * 4 + "abcd")
+        self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "\u754c" * 4 + "abcd")
+        self.send_wait(child, b":p", lambda screen: screen.row(0) == "FIRST")
+        self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "FIRST")
+        self.send_wait(child, b":n", lambda screen: screen.row(0) == "\u754c" * 4 + "abcd")
+        self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "\u754c" * 4 + "abcd")
+        self.quit(child)
+
+    def test_horizontal_limit_grows_with_partial_stream_input(self):
+        reader, writer = os.pipe()
+        self.addCleanup(os.close, writer)
+        child = self.pager(None, stdin_fd=reader, columns=12, rows=5)
+        child.wait_for(lambda screen: screen.row(4) == "stdin")
+        self.send_wait(child, b"999\x1b[C", lambda screen: not screen.row(0) and screen.row(4) == "stdin")
+        output = child.output_bytes
+        os.write(writer, b"0123456789abcdefghij")
+        child.wait_for(lambda screen: screen.row(0) == "0123456789a>", after_bytes=output)
+        self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "89abcdefghij")
+        output = child.output_bytes
+        os.write(writer, b"klmnopqrst")
+        child.wait_for(lambda screen: screen.row(0) == "89abcdefghi>", after_bytes=output)
+        self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "ijklmnopqrst")
+        self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "ijklmnopqrst")
+        output = child.output_bytes
+        child.resize(32, 5)
+        child.wait_for(lambda screen: screen.row(0) == "0123456789abcdefghijklmnopqrst", after_bytes=output)
+        self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "0123456789abcdefghijklmnopqrst")
         self.quit(child)
 
     def test_switching_files_restores_stream_history_and_file_position(self):
@@ -112,8 +182,7 @@ class PagerTerminalTests(unittest.TestCase):
         reader, writer = os.pipe()
         self.addCleanup(os.close, writer)
         child = self.pager(None, stdin_fd=reader, rows=8)
-        child.wait_for(lambda screen: bool(screen.row(7).strip()))
-        self.assertNotIn("(END)", child.screen.row(7))
+        child.wait_for(lambda screen: screen.row(7) == "stdin")
         os.write(writer, b"LIVE-FIRST\nlive-second")
         child.wait_for(lambda screen: screen.contains("LIVE-FIRST") and bool(screen.row(screen.rows - 1).strip()))
         child.wait_for(lambda screen: "live-second" in screen.row(1))
@@ -130,7 +199,7 @@ class PagerTerminalTests(unittest.TestCase):
         child = self.pager(path, "--wrap", columns=32, rows=8)
         child.wait_for(lambda screen: "FIRST" in screen.row(0))
         self.assertFalse(child.screen.contains("WRAPPED-EOF"))
-        self.send_wait(child, b"G", lambda screen: screen.contains("WRAPPED-EOF") and "(END)" in screen.row(7))
+        self.send_wait(child, b"G", lambda screen: screen.contains("WRAPPED-EOF") and screen.row(7) == str(path)[:screen.columns])
         self.assertNotIn("FIRST", child.screen.row(0))
         self.assertTrue(any("wrapped-content" in child.screen.row(row) for row in range(6)))
         self.quit(child)
@@ -138,7 +207,7 @@ class PagerTerminalTests(unittest.TestCase):
     def test_follow_empty_file_append_and_truncate(self):
         path = self.file("")
         child = self.pager(path)
-        child.wait_for(lambda screen: "(END)" in screen.row(23))
+        child.wait_for(lambda screen: screen.row(23) == str(path)[:screen.columns])
         child.send(b"F")
         output = child.output_bytes
         with path.open("ab") as producer:
@@ -153,8 +222,7 @@ class PagerTerminalTests(unittest.TestCase):
         path = Path(self.temporary.name) / "input.fifo"
         os.mkfifo(path)
         child = self.pager(path)
-        child.wait_for(lambda screen: bool(screen.row(23).strip()))
-        self.assertNotIn("(END)", child.screen.row(23))
+        child.wait_for(lambda screen: screen.row(23) == str(path)[:screen.columns])
         self.quit(child)
 
     def test_search_handles_long_colored_lines_and_exact_anchors(self):

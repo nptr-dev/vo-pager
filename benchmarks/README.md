@@ -54,9 +54,13 @@ Three times are reported:
 
 | Metric | Start | End |
 | --- | --- | --- |
-| Startup | Starting the native supervisor | First-line marker rendered and last-row prompt present |
-| Scan | Sending `G` to the controlling terminal | Last-line marker rendered and last-row prompt contains `(END)` |
-| End to end | Starting the native supervisor | The same rendered EOF condition |
+| Startup | Starting the native supervisor | First-line marker rendered and nonempty source location (vo) or prompt (less) on the last row |
+| Scan | Sending `G` to the controlling terminal | Final-line marker rendered and nonempty source location (vo) or `(END)` prompt (less) on the last row |
+| End to end | Starting the native supervisor | The same final-line display condition |
+
+The vo bottom bar shows the input's file path or `stdin`. GNU less signals EOF
+with `(END)`. Each pager's scan wait requires its final corpus marker and the
+last-row condition above after output arrives in response to `G`.
 
 The waits parse terminal output into a cell-based screen. They do not infer
 readiness from a fixed delay or match bytes from an earlier terminal frame.
