@@ -95,3 +95,27 @@ unconnected FIFO, partial-line stream updates, and byte-exact redirected output.
 They also check document ANSI control filtering, color downgrade and suppression,
 UTF-8 cell widths, content remaining visible after `-F`, and original termios
 restoration after normal exit and SIGTERM.
+
+Recorded baseline: Linux x86_64, Rust 1.98.1, GNU less 704, source revision
+f6b63f7206fb396c180fac2b211c437511451be1. Seven repeats per case used
+32 MiB corpora, warm caches, and CPU 7 affinity. Values below are medians; the
+[snapshot](results/linux-x86_64-32mib.json) retains all 84 samples, ranges,
+median absolute deviations, corpus and binary hashes, and machine conditions.
+Executable and corpus paths in the snapshot are normalized for portability.
+
+| Corpus | Input | vo MiB/s | less MiB/s | vo RSS MiB | less RSS MiB |
+| --- | --- | ---: | ---: | ---: | ---: |
+| plain | file | 1114 | 199 | 2.95 | 2.62 |
+| plain | stream | 818 | 119 | 2.81 | 34.81 |
+| ansi | file | 2075 | 331 | 2.98 | 2.64 |
+| ansi | stream | 749 | 106 | 2.90 | 34.73 |
+| long-utf8 | file | 1132 | 261 | 2.96 | 2.75 |
+| long-utf8 | stream | 989 | 172 | 2.96 | 34.87 |
+
+These measurements use end-to-end throughput, including launch and the final
+display. File throughput improved by 4.3 to 6.3 times; stream throughput
+improved by 5.7 to 7.0 times. Stream peak RSS fell by about 92 percent. File
+peak RSS remains 0.2 to 0.3 MiB higher, and startup is not consistently faster.
+The file-memory target remains unmet on this machine. Scheduling variation
+is visible in the individual samples; these results describe this workload
+and environment.
