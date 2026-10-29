@@ -237,24 +237,27 @@ class PagerTerminalTests(unittest.TestCase):
                 self.assert_cell_colors(child.screen.cells[4], None, background)
                 self.quit(child)
 
-    def test_config_errors_are_reported_before_terminal_setup(self):
-        path = self.file("CONTENT\n")
+    def test_config_load_failures_silently_use_defaults(self):
+        path = self.file("A" * 60 + "\nPLAIN\n")
         home = Path(self.temporary.name) / "home"
         cases = [
             (Path(self.temporary.name) / "malformed.json", "{", None),
             (home / ".config/vo/config.json", '{"theme":{"status":{"foreground":"red"}}}', {"HOME": str(home)}),
             (Path(self.temporary.name) / "missing.json", None, None),
+            (Path(self.temporary.name), None, None),
         ]
         for config, contents, environment in cases:
             with self.subTest(config=config):
                 if contents is not None:
                     config.parent.mkdir(parents=True, exist_ok=True)
                     config.write_text(contents, encoding="utf-8")
-                child = self.pager(path, extra=environment or {"VO_CONFIG": str(config)})
-                self.assertNotEqual(child.wait_exit(), 0)
-                self.assertIn(str(config).encode(), child.raw)
-                self.assertNotIn(b"\x1b", child.raw)
-                self.assertTrue(child.termios_restored(), "config errors must leave termios unchanged")
+                child = self.pager(path, columns=40, rows=5, extra=environment or {"VO_CONFIG": str(config)})
+                child.wait_for(lambda screen: screen.row(0) == "A" * 39 + ">" and screen.row(4).endswith("C-w Wrap"))
+                self.assertEqual(child.screen.row(1), "PLAIN")
+                self.assert_cell_colors(child.screen.cells[0][39:], ("indexed", 234), ("indexed", 252))
+                self.assert_cell_colors(child.screen.cells[4], None, None)
+                self.assertNotIn(b"vo: ", child.raw)
+                self.quit(child)
 
     def test_fallback_and_information_commands_ignore_invalid_config(self):
         path = self.file("\x1b[31mDUMB-CONTENT\x1b[0m\n")

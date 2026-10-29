@@ -132,7 +132,7 @@ fn execute() -> io::Result<()> {
         Color::Auto if std::env::var_os("NO_COLOR").is_some() => ColorLevel::None,
         _ => capabilities.color,
     };
-    let theme = FileConfig::load()?.theme.resolve(color);
+    let theme = FileConfig::load().theme.resolve(color);
     let config = Config {
         wrap: args.wrap,
         line_numbers: args.line_numbers,

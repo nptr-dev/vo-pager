@@ -98,10 +98,9 @@ option set are outside the current implementation.
 2. `$XDG_CONFIG_HOME/vo/config.json`, when `XDG_CONFIG_HOME` is an absolute path.
 3. `$HOME/.config/vo/config.json`, including on macOS.
 
-An absent default file preserves the built-in theme. An explicit `VO_CONFIG`
-path must exist. Invalid JSON, unknown fields, and unreadable files produce an
-error naming the config file before entering terminal mode. Redirected output
-continues to copy the input bytes without loading a theme.
+If the selected file is missing, unreadable, or invalid, `vo` silently uses the
+built-in defaults, including when `VO_CONFIG` is set. Redirected output continues
+to copy the input bytes without loading a theme.
 
 For example:
 
