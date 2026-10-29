@@ -1,6 +1,7 @@
 use lexopt::{Arg, ValueExt};
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use vo_pager::config::FileConfig;
 use vo_pager::pager::{Case, Config};
 use vo_pager::render::ColorLevel;
 use vo_pager::terminal::Capabilities;
@@ -131,11 +132,13 @@ fn execute() -> io::Result<()> {
         Color::Auto if std::env::var_os("NO_COLOR").is_some() => ColorLevel::None,
         _ => capabilities.color,
     };
+    let theme = FileConfig::load()?.theme.resolve(color);
     let config = Config {
         wrap: args.wrap,
         line_numbers: args.line_numbers,
         tabstop: usize::from(args.tabstop),
         color,
+        theme,
         no_init: args.no_init,
         quit_if_one_screen: args.quit_if_one_screen,
         case: args.case,
@@ -182,7 +185,9 @@ Options:\n\
   -x, --tabstop CELLS       Tab stop width, 1..256 (default: 8)\n\
       --initial-command C   Start at G (end), F (follow), or line number\n\
   -h, --help                Show this help\n\
-  -V, --version             Show the version\n";
+  -V, --version             Show the version\n\n\
+Theme config: $VO_CONFIG, $XDG_CONFIG_HOME/vo/config.json,\n\
+              or ~/.config/vo/config.json (including macOS).\n";
 
 #[cfg(test)]
 mod tests {

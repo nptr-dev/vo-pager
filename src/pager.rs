@@ -2,6 +2,7 @@ use crate::input::Source;
 use crate::render::{ColorLevel, LineRenderer, RenderOptions};
 use crate::search::{Pattern, Progress, Search};
 use crate::terminal::{Capabilities, Key, Terminal};
+use crate::theme::ResolvedTheme;
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -26,6 +27,7 @@ pub struct Config {
     pub line_numbers: bool,
     pub tabstop: usize,
     pub color: ColorLevel,
+    pub theme: ResolvedTheme,
     pub no_init: bool,
     pub quit_if_one_screen: bool,
     pub case: Case,
@@ -258,7 +260,7 @@ impl Pager {
             wrap: self.config.wrap,
             tabstop: self.config.tabstop,
             color: self.config.color,
-            indicators: true,
+            indicator: Some(self.config.theme.truncation),
         }
     }
 
@@ -294,7 +296,10 @@ impl Pager {
                 .collect();
             return terminal.draw(
                 &rows,
-                &clip("vo help | q or Escape returns to the file", width),
+                &self.config.theme.status.paint(
+                    clip("vo help | q or Escape returns to the file", width),
+                    width,
+                ),
             );
         }
         let number_width = self.number_width(width, height);
@@ -335,7 +340,7 @@ impl Pager {
                     } else {
                         " ".repeat(number_width)
                     };
-                    let mut numbered = number.into_bytes();
+                    let mut numbered = self.config.theme.line_numbers.paint(number.into_bytes(), 0);
                     numbered.append(&mut row);
                     row = numbered;
                 }
@@ -380,13 +385,25 @@ impl Pager {
             let caret = String::from_utf8_lossy(&prefix).width();
             let horizontal = caret.saturating_sub(width.saturating_sub(1));
             terminal.set_prompt_cursor(Some(caret - horizontal));
-            clip_at(&status, width, horizontal)
+            self.config
+                .theme
+                .prompt
+                .paint(clip_at(&status, width, horizontal), width)
         } else if let Some(command) = self.command {
-            clip(&command.to_string(), width)
+            self.config
+                .theme
+                .prompt
+                .paint(clip(&command.to_string(), width), width)
         } else if !self.prefix.is_empty() {
-            clip(&self.prefix, width)
+            self.config
+                .theme
+                .prompt
+                .paint(clip(&self.prefix, width), width)
         } else if !self.message.is_empty() {
-            clip(&self.message, width)
+            self.config
+                .theme
+                .message
+                .paint(clip(&self.message, width), width)
         } else {
             self.location_bar(width, options.width)
         };
@@ -396,7 +413,11 @@ impl Pager {
 
     fn location_bar(&self, width: usize, content_width: usize) -> Vec<u8> {
         if self.config.wrap || self.horizontal.max_width <= content_width {
-            return clip(&self.source.name, width);
+            return self
+                .config
+                .theme
+                .status
+                .paint(clip(&self.source.name, width), width);
         }
         const HINT: &[u8] = b"C-w Wrap";
         let location_width = width.saturating_sub(HINT.len() + 1);
@@ -410,7 +431,13 @@ impl Pager {
             b' ',
             width.saturating_sub(HINT.len()).saturating_sub(occupied),
         ));
-        status.extend_from_slice(&HINT[..HINT.len().min(width)]);
+        let mut status = self.config.theme.status.paint(status, 0);
+        status.extend(
+            self.config
+                .theme
+                .hint
+                .paint(HINT[..HINT.len().min(width)].to_vec(), 0),
+        );
         status
     }
 
@@ -1030,7 +1057,7 @@ fn clip_at(text: &str, width: usize, horizontal: usize) -> Vec<u8> {
             wrap: false,
             tabstop: 8,
             color: ColorLevel::None,
-            indicators: false,
+            indicator: None,
         },
         0,
         1,

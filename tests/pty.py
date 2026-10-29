@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -38,6 +40,18 @@ class PagerTerminalTests(unittest.TestCase):
         path = Path(self.temporary.name) / "input.txt"
         path.write_text(text, encoding="utf-8")
         return path
+
+    def config(self, theme: dict, relative="config.json") -> Path:
+        path = Path(self.temporary.name) / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"theme": theme}), encoding="utf-8")
+        return path
+
+    def assert_cell_colors(self, cells, foreground, background):
+        self.assertEqual(
+            [(cell.foreground, cell.background) for cell in cells],
+            [(foreground, background)] * len(cells),
+        )
 
     def pager(self, path: Path | None, *options: str, columns=80, rows=24, term="xterm-256color", extra=None, stdin_fd=None):
         command = [str(VO), *options]
@@ -138,6 +152,126 @@ class PagerTerminalTests(unittest.TestCase):
                 self.assertIsNone(child.screen.cells[1][0].background)
                 self.assertIsNone(child.screen.cells[4][0].background)
                 self.quit(child)
+
+    def test_custom_theme_styles_ui_without_changing_document_sgr(self):
+        config = self.config({
+            "status": {"foreground": "#ff0000", "background": 17},
+            "hint": {"foreground": 214},
+            "prompt": {"background": 22},
+            "message": {"foreground": "default", "background": 52},
+            "line_numbers": {"foreground": 33, "background": 236},
+            "truncation": {"foreground": 226},
+        })
+        reader, writer = os.pipe()
+        os.write(writer, b"\x1b[31;44m" + b"A" * 60 + b"\x1b[0m\nPLAIN\n")
+        os.close(writer)
+        child = self.pager(None, "-N", columns=40, rows=6, stdin_fd=reader, extra={"VO_CONFIG": str(config)})
+        child.wait_for(lambda screen: screen.row(0) == "1 " + "A" * 37 + ">" and screen.row(5).endswith("C-w Wrap"))
+        self.assert_cell_colors(child.screen.cells[0][:2], ("indexed", 33), ("indexed", 236))
+        self.assert_cell_colors(child.screen.cells[0][2:39], ("ansi", 1), ("ansi", 4))
+        self.assert_cell_colors(child.screen.cells[0][39:], ("indexed", 226), ("indexed", 252))
+        self.assert_cell_colors(child.screen.cells[1][2:7], None, None)
+        self.assert_cell_colors(child.screen.cells[5][:32], ("indexed", 196), ("indexed", 17))
+        self.assert_cell_colors(child.screen.cells[5][32:], ("indexed", 214), ("indexed", 17))
+
+        # Existing sessions retain the resolved config when the file changes.
+        config.write_text("{", encoding="utf-8")
+        self.send_wait(child, b"/absent", lambda screen: screen.row(5) == "/absent")
+        self.assert_cell_colors(child.screen.cells[5], ("indexed", 196), ("indexed", 22))
+        self.assert_cell_colors(child.screen.cells[0][2:39], ("ansi", 1), ("ansi", 4))
+        self.send_wait(child, b"\n", lambda screen: screen.row(5) == "Pattern not found")
+        self.assert_cell_colors(child.screen.cells[5], None, ("indexed", 52))
+        self.assert_cell_colors(child.screen.cells[1][2:7], None, None)
+        self.send_wait(child, b"\x17", lambda screen: screen.row(5) == "stdin")
+        self.assert_cell_colors(child.screen.cells[5], ("indexed", 196), ("indexed", 17))
+        self.assert_cell_colors(child.screen.cells[2][2:7], None, None)
+        self.quit(child)
+
+    def test_theme_colors_follow_terminal_capabilities_and_overrides(self):
+        path = self.file("A" * 60 + "\nPLAIN\n")
+        config = self.config({
+            "status": {"foreground": "#ff0000", "background": 21, "bold": True},
+            "truncation": {"foreground": "#ff0000", "background": 21},
+        })
+        cases = [
+            ("xterm-256color", (), {}, ("indexed", 196), ("indexed", 21)),
+            ("xterm-256color", (), {"COLORTERM": "truecolor"}, ("rgb", 255, 0, 0), ("indexed", 21)),
+            ("linux", (), {}, ("ansi", 1), ("ansi", 4)),
+            ("xterm-256color", ("--color=never",), {}, None, None),
+            ("xterm-256color", (), {"NO_COLOR": "1"}, None, None),
+            ("xterm-256color", ("--color=always",), {"NO_COLOR": "1", "COLORTERM": "truecolor"}, ("rgb", 255, 0, 0), ("indexed", 21)),
+        ]
+        for term, options, environment, foreground, background in cases:
+            with self.subTest(term=term, options=options, environment=environment):
+                child = self.pager(
+                    path, "-N", *options, columns=20, rows=5, term=term,
+                    extra={"VO_CONFIG": str(config), **environment},
+                )
+                child.wait_for(lambda screen: screen.row(0) == "1 " + "A" * 17 + ">" and screen.row(4).endswith("C-w Wrap"))
+                self.assert_cell_colors(child.screen.cells[0][:2], None, None)
+                self.assert_cell_colors(child.screen.cells[0][19:], foreground, background)
+                self.assert_cell_colors(child.screen.cells[1][2:7], None, None)
+                self.assert_cell_colors(child.screen.cells[4], foreground, background)
+                if foreground is None:
+                    for sgr in re.findall(rb"\x1b\[([0-9;]*)m", child.raw):
+                        self.assertTrue(all(code in (b"", b"0") for code in sgr.split(b";")), sgr)
+                self.quit(child)
+
+    def test_config_path_precedence_and_home_fallback(self):
+        path = self.file("CONTENT\n")
+        explicit = self.config({"status": {"background": 17}}, "explicit.json")
+        xdg = self.config({"status": {"background": 22}}, "xdg/vo/config.json").parent.parent
+        home = self.config({"status": {"background": 52}}, "home/.config/vo/config.json").parents[2]
+        missing = Path(self.temporary.name) / "missing-xdg"
+        cases = [
+            ({"VO_CONFIG": str(explicit), "XDG_CONFIG_HOME": str(xdg), "HOME": str(home)}, ("indexed", 17)),
+            ({"VO_CONFIG": "", "XDG_CONFIG_HOME": str(xdg), "HOME": str(home)}, ("indexed", 22)),
+            ({"XDG_CONFIG_HOME": "relative", "HOME": str(home)}, ("indexed", 52)),
+            ({"VO_CONFIG": "", "XDG_CONFIG_HOME": "", "HOME": str(home)}, ("indexed", 52)),
+            ({"XDG_CONFIG_HOME": str(missing), "HOME": str(home)}, None),
+        ]
+        for environment, background in cases:
+            with self.subTest(environment=environment):
+                child = self.pager(path, columns=40, rows=5, extra=environment)
+                child.wait_for(lambda screen: screen.row(0) == "CONTENT" and screen.row(4) == str(path)[:40])
+                self.assert_cell_colors(child.screen.cells[4], None, background)
+                self.quit(child)
+
+    def test_config_errors_are_reported_before_terminal_setup(self):
+        path = self.file("CONTENT\n")
+        home = Path(self.temporary.name) / "home"
+        cases = [
+            (Path(self.temporary.name) / "malformed.json", "{", None),
+            (home / ".config/vo/config.json", '{"theme":{"status":{"foreground":"red"}}}', {"HOME": str(home)}),
+            (Path(self.temporary.name) / "missing.json", None, None),
+        ]
+        for config, contents, environment in cases:
+            with self.subTest(config=config):
+                if contents is not None:
+                    config.parent.mkdir(parents=True, exist_ok=True)
+                    config.write_text(contents, encoding="utf-8")
+                child = self.pager(path, extra=environment or {"VO_CONFIG": str(config)})
+                self.assertNotEqual(child.wait_exit(), 0)
+                self.assertIn(str(config).encode(), child.raw)
+                self.assertNotIn(b"\x1b", child.raw)
+                self.assertTrue(child.termios_restored(), "config errors must leave termios unchanged")
+
+    def test_fallback_and_information_commands_ignore_invalid_config(self):
+        path = self.file("\x1b[31mDUMB-CONTENT\x1b[0m\n")
+        config = Path(self.temporary.name) / "invalid.json"
+        config.write_text("{", encoding="utf-8")
+        cases = [
+            (path, (), "dumb", b"DUMB-CONTENT"),
+            (None, ("--help",), "xterm-256color", b"vo - View Optimally"),
+            (None, ("--version",), "xterm-256color", b"vo "),
+        ]
+        for source, options, term, expected in cases:
+            with self.subTest(options=options, term=term):
+                child = self.pager(source, *options, term=term, rows=40, extra={"VO_CONFIG": str(config)})
+                self.assertEqual(child.wait_exit(), 0)
+                self.assertIn(expected, child.raw)
+                self.assertNotIn(b"\x1b", child.raw)
+                self.assertTrue(child.termios_restored())
 
     def test_horizontal_scroll_is_bounded_by_lines_seen_offscreen_and_resize(self):
         path = self.file(
@@ -297,13 +431,15 @@ class PagerTerminalTests(unittest.TestCase):
         content = b"\x00\xff\xfe\x1b[31mcolored\x1b[0m\r\n\t\x08unterminated"
         path = self.file("")
         path.write_bytes(content)
+        config = Path(self.temporary.name) / "invalid.json"
+        config.write_text("{", encoding="utf-8")
         for source in ("file", "stream"):
             with self.subTest(source=source):
                 command = [str(VO), "--", str(path)] if source == "file" else [str(VO)]
                 result = subprocess.run(
                     command, input=content if source == "stream" else None,
                     capture_output=True, timeout=5, check=True,
-                    env=terminal_environment(),
+                    env=terminal_environment(extra={"VO_CONFIG": str(config)}),
                 )
                 self.assertEqual(result.stdout, content)
                 self.assertEqual(result.stderr, b"")

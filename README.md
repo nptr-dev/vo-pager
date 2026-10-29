@@ -3,10 +3,10 @@
 `vo` is a Rust terminal pager for files, pipes, and FIFOs. Long lines are
 truncated to the terminal width by default. `Ctrl-W` toggles wrapping; both
 layouts are calculated by the pager and update when the terminal is resized.
-Truncated lines end with `>` on a light-grey background with a dark foreground,
-downgraded to the terminal's palette. Horizontal scrolling stops at the widest line
-encountered in the current input, including lines no longer on screen. The
-limit adjusts with terminal width and incoming stream data. The bottom bar
+By default, truncated lines end with `>` on a light-grey background with a dark
+foreground, downgraded to the terminal's palette. Horizontal scrolling stops at
+the widest line encountered in the current input, including lines no longer on
+screen. The limit adjusts with terminal width and incoming stream data. The bottom bar
 shows the file path, or `stdin`. In truncation mode, `C-w Wrap` appears when an
 encountered line exceeds the available content width. Commands and messages
 temporarily replace the bar.
@@ -61,11 +61,11 @@ size limits; numeric search counts are capped at 10,000.
 
 `vo --help` lists options, including less-compatible `-S`, `-N`, `-i`, `-I`,
 `-F`, `-X`, `-R`, and `-x`. SGR (Select Graphic Rendition) styles are handled
-by default. Terminal capabilities come from the terminfo database and
-`COLORTERM`. RGB and indexed colors are downgraded to the terminal's 256-,
-16-, or 8-color palette. Monochrome terminals retain attributes while dropping
-colors. `NO_COLOR` and `--color=never` suppress document SGR;
-`--color=always` overrides `NO_COLOR` while retaining the detected palette.
+by default. Terminal capabilities come from the terminfo database, `TERM`, and
+`COLORTERM` (`truecolor` or `24bit`). RGB and indexed colors are downgraded to the
+terminal's 256-, 16-, or 8-color palette. Monochrome terminals retain attributes
+while dropping colors. `NO_COLOR` and `--color=never` suppress document and theme
+SGR; `--color=always` overrides `NO_COLOR` while retaining the detected palette.
 Cursor movement, erasure, OSC, DCS, and other document control sequences are
 discarded. Each logical line starts with default attributes, as with less `-R`.
 
@@ -89,6 +89,47 @@ growth and truncation. Replacing its pathname with a new inode requires
 reopening it using `:e`. This is a viewing alternative, with the commands above;
 lesskey customizations, input preprocessors, filtering, and the full GNU less
 option set are outside the current implementation.
+
+## Themes
+
+`vo` selects one JSON config path for interactive viewing, in this order:
+
+1. The path in `VO_CONFIG`, when nonempty. Relative paths are allowed.
+2. `$XDG_CONFIG_HOME/vo/config.json`, when `XDG_CONFIG_HOME` is an absolute path.
+3. `$HOME/.config/vo/config.json`, including on macOS.
+
+An absent default file preserves the built-in theme. An explicit `VO_CONFIG`
+path must exist. Invalid JSON, unknown fields, and unreadable files produce an
+error naming the config file before entering terminal mode. Redirected output
+continues to copy the input bytes without loading a theme.
+
+For example:
+
+```json
+{
+  "theme": {
+    "status": { "foreground": "#cdd6f4", "background": "#313244" },
+    "hint": { "foreground": "#89b4fa", "bold": true },
+    "prompt": { "foreground": "#a6e3a1" },
+    "message": { "foreground": "#f9e2af" },
+    "line_numbers": { "foreground": 245, "dim": true },
+    "truncation": { "foreground": "#1e1e2e", "background": "#89b4fa" }
+  }
+}
+```
+
+Every style accepts `foreground`, `background`, and the boolean attributes
+`bold`, `dim`, `italic`, `underline`, and `reverse`. Colors can be `"#RRGGBB"`,
+an integer palette index from 0 to 255, or `"default"` for the terminal's default
+color. Omitted fields retain their defaults; `hint`, `prompt`, and `message`
+inherit `status`. Styles are reset between UI elements and document content,
+so the document keeps its own ANSI colors.
+
+Capability detection and theme color conversion run once at startup using the
+environment and terminfo. Redraws reuse the resolved styles and cached UI SGR
+sequences.
+
+## Development
 
 Verify with:
 

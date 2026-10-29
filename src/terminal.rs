@@ -116,7 +116,7 @@ impl Capabilities {
             Database::from_name(&term).ok()
         };
         let colorterm = env::var("COLORTERM").ok();
-        Self::from_database(database.as_ref(), colorterm.as_deref())
+        Self::from_database(database.as_ref(), &term, colorterm.as_deref())
     }
 
     pub fn interactive(&self) -> bool {
@@ -129,7 +129,7 @@ impl Capabilities {
                 .is_ok()
     }
 
-    fn from_database(database: Option<&Database>, colorterm: Option<&str>) -> Self {
+    fn from_database(database: Option<&Database>, term: &str, colorterm: Option<&str>) -> Self {
         let Some(database) = database else {
             return Self {
                 color: ColorLevel::None,
@@ -153,18 +153,21 @@ impl Capabilities {
             Some(Value::Number(count)) => *count,
             _ => 0,
         };
-        let true_color = colorterm
-            .is_some_and(|value| value.eq_ignore_ascii_case("truecolor") || value == "24bit")
-            || matches!(database.raw("Tc"), Some(Value::True))
-            || matches!(database.raw("RGB"), Some(Value::True))
-            || colors >= 1 << 24;
+        // Numeric RGB counts bits per channel; RGB#1 only declares eight direct colors.
+        let rgb = matches!(database.raw("RGB"), Some(Value::True | Value::Number(8..)));
+        let true_color = colorterm.is_some_and(|value| {
+            value.eq_ignore_ascii_case("truecolor") || value.eq_ignore_ascii_case("24bit")
+        }) || matches!(database.raw("Tc"), Some(Value::True))
+            || rgb
+            || colors >= 1 << 24
+            || term.ends_with("-direct");
         let color = if !style {
             ColorLevel::None
         } else if !ansi_color {
             ColorLevel::Monochrome
         } else if true_color {
             ColorLevel::TrueColor
-        } else if colors >= 256 {
+        } else if colors >= 256 || term.ends_with("-256color") {
             ColorLevel::Ansi256
         } else if colors >= 16 {
             ColorLevel::Ansi16
@@ -957,14 +960,14 @@ mod tests {
         builder.name("test");
         builder.raw("cursor_address", b"\x1b[%i%p1%d;%p2%dH".to_vec());
         let database = builder.build().unwrap();
-        assert!(!Capabilities::from_database(Some(&database), None).usable);
+        assert!(!Capabilities::from_database(Some(&database), "test", None).usable);
         let mut builder = Database::new();
         builder.name("test");
         builder.raw("cursor_address", b"\x1b[%i%p1%d;%p2%dH".to_vec());
         builder.raw("clr_eol", b"\x1b[K".to_vec());
         let database = builder.build().unwrap();
-        assert!(Capabilities::from_database(Some(&database), None).usable);
-        assert!(!Capabilities::from_database(None, None).usable);
+        assert!(Capabilities::from_database(Some(&database), "test", None).usable);
+        assert!(!Capabilities::from_database(None, "test", None).usable);
     }
 
     #[test]
@@ -983,13 +986,103 @@ mod tests {
             builder.raw("set_a_foreground", b"\x1b[3%p1%dm".to_vec());
             builder.raw("max_colors", colors);
             let database = builder.build().unwrap();
-            let capabilities = Capabilities::from_database(Some(&database), None);
+            let capabilities = Capabilities::from_database(Some(&database), "test", None);
             assert_eq!(capabilities.color, expected);
             assert!(capabilities.style);
+            for colorterm in ["truecolor", "TRUECOLOR", "24bit", "24BIT"] {
+                assert_eq!(
+                    Capabilities::from_database(Some(&database), "test", Some(colorterm)).color,
+                    ColorLevel::TrueColor
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn detects_boolean_and_numeric_truecolor_capabilities() {
+        for (name, value, expected) in [
+            ("Tc", Value::True, ColorLevel::TrueColor),
+            ("RGB", Value::True, ColorLevel::TrueColor),
+            ("RGB", Value::Number(8), ColorLevel::TrueColor),
+            ("RGB", Value::Number(16), ColorLevel::TrueColor),
+            ("RGB", Value::Number(1), ColorLevel::Ansi8),
+            ("RGB", Value::Number(0), ColorLevel::Ansi8),
+            ("RGB", Value::Number(-1), ColorLevel::Ansi8),
+        ] {
+            let mut builder = Database::new();
+            builder.name("test");
+            builder.raw("exit_attribute_mode", b"\x1b[m".to_vec());
+            builder.raw("set_a_foreground", b"\x1b[3%p1%dm".to_vec());
+            builder.raw("max_colors", 8);
+            builder.raw(name, value);
+            let database = builder.build().unwrap();
             assert_eq!(
-                Capabilities::from_database(Some(&database), Some("truecolor")).color,
-                ColorLevel::TrueColor
+                Capabilities::from_database(Some(&database), "test", None).color,
+                expected,
+                "capability {name}"
             );
+        }
+    }
+
+    #[test]
+    fn recognizes_explicit_term_color_suffixes() {
+        let mut builder = Database::new();
+        builder.name("test");
+        builder.raw("exit_attribute_mode", b"\x1b[m".to_vec());
+        builder.raw("set_a_foreground", b"\x1b[3%p1%dm".to_vec());
+        builder.raw("max_colors", 8);
+        let database = builder.build().unwrap();
+        for (term, expected) in [
+            ("xterm-256color", ColorLevel::Ansi256),
+            ("tmux-direct", ColorLevel::TrueColor),
+            ("xterm", ColorLevel::Ansi8),
+            ("xterm-256colors", ColorLevel::Ansi8),
+            ("xterm-indirect", ColorLevel::Ansi8),
+        ] {
+            assert_eq!(
+                Capabilities::from_database(Some(&database), term, None).color,
+                expected,
+                "TERM={term}"
+            );
+        }
+        assert_eq!(
+            Capabilities::from_database(Some(&database), "xterm-256color", Some("truecolor")).color,
+            ColorLevel::TrueColor
+        );
+        assert_eq!(
+            Capabilities::from_database(Some(&database), "test", Some("256color")).color,
+            ColorLevel::Ansi8
+        );
+    }
+
+    #[test]
+    fn color_hints_require_terminfo_and_ansi_controls() {
+        for term in ["", "dumb", "unknown-256color", "unknown-direct"] {
+            let capabilities = Capabilities::from_database(None, term, Some("truecolor"));
+            assert_eq!(capabilities.color, ColorLevel::None);
+            assert!(!capabilities.style);
+            assert!(!capabilities.usable);
+        }
+        for (reset, foreground, expected, style) in [
+            ("", "\x1b[31m", ColorLevel::None, false),
+            ("reset", "\x1b[31m", ColorLevel::None, false),
+            ("\x1b[m", "", ColorLevel::Monochrome, true),
+            ("\x1b[m", "color", ColorLevel::Monochrome, true),
+        ] {
+            let mut builder = Database::new();
+            builder.name("test");
+            builder.raw("exit_attribute_mode", reset.as_bytes().to_vec());
+            builder.raw("set_a_foreground", foreground.as_bytes().to_vec());
+            builder.raw("max_colors", 1 << 24);
+            builder.raw("Tc", ());
+            builder.raw("RGB", 8);
+            let database = builder.build().unwrap();
+            for term in ["xterm-256color", "xterm-direct"] {
+                let capabilities =
+                    Capabilities::from_database(Some(&database), term, Some("truecolor"));
+                assert_eq!(capabilities.color, expected);
+                assert_eq!(capabilities.style, style);
+            }
         }
     }
 

@@ -19,15 +19,15 @@ pub struct RenderOptions {
     pub wrap: bool,
     pub tabstop: usize,
     pub color: ColorLevel,
-    pub indicators: bool,
+    pub indicator: Option<StyleState>,
 }
 
 /// SGR state can be carried explicitly between lines. `new` starts from defaults.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StyleState {
-    attributes: u16,
-    foreground: Option<Color>,
-    background: Option<Color>,
+    pub(crate) attributes: u16,
+    pub(crate) foreground: Option<Color>,
+    pub(crate) background: Option<Color>,
     underline: Option<Color>,
 }
 
@@ -70,7 +70,7 @@ pub struct LineRenderer {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Color {
+pub(crate) enum Color {
     Ansi(u8),
     Indexed(u8),
     Rgb(u8, u8, u8),
@@ -101,12 +101,12 @@ struct EdgeCell {
     preceding_style: StyleState,
 }
 
-const BOLD: u16 = 1 << 0;
-const DIM: u16 = 1 << 1;
-const ITALIC: u16 = 1 << 2;
-const UNDERLINE: u16 = 1 << 3;
+pub(crate) const BOLD: u16 = 1 << 0;
+pub(crate) const DIM: u16 = 1 << 1;
+pub(crate) const ITALIC: u16 = 1 << 2;
+pub(crate) const UNDERLINE: u16 = 1 << 3;
 const BLINK: u16 = 1 << 4;
-const REVERSE: u16 = 1 << 5;
+pub(crate) const REVERSE: u16 = 1 << 5;
 const CONCEAL: u16 = 1 << 6;
 const STRIKE: u16 = 1 << 7;
 const OVERLINE: u16 = 1 << 8;
@@ -195,7 +195,7 @@ impl LineRenderer {
             self.character('\u{fffd}');
         }
         self.flush_cell();
-        if self.options.indicators
+        if self.options.indicator.is_some()
             && !self.options.wrap
             && self.logical_column > self.options.horizontal.saturating_add(self.options.width)
         {
@@ -437,7 +437,7 @@ impl LineRenderer {
             let cell_end = self.column.saturating_add(cell.width);
             if self.column >= self.options.horizontal && cell_end <= end && self.column < end {
                 if self.selected() {
-                    if self.options.indicators && cell.width != 0 && cell_end == end {
+                    if self.options.indicator.is_some() && cell.width != 0 && cell_end == end {
                         self.edge = Some(EdgeCell {
                             start: self.output.len(),
                             width: cell.width,
@@ -529,7 +529,7 @@ impl LineRenderer {
         style: StyleState,
         reaches_edge: bool,
     ) {
-        let prefix = if self.options.indicators && reaches_edge {
+        let prefix = if self.options.indicator.is_some() && reaches_edge {
             count - 1
         } else {
             count
@@ -556,7 +556,7 @@ impl LineRenderer {
     }
 
     fn indicator(&mut self) {
-        let Some(edge) = self.edge else {
+        let (Some(edge), Some(style)) = (self.edge, self.options.indicator) else {
             return;
         };
         self.output.truncate(edge.start);
@@ -564,18 +564,6 @@ impl LineRenderer {
         if edge.width > 1 {
             self.emit_spaces(edge.width - 1, StyleState::default());
         }
-        let style = if self.options.color == ColorLevel::Monochrome {
-            StyleState {
-                attributes: REVERSE,
-                ..StyleState::default()
-            }
-        } else {
-            StyleState {
-                foreground: Some(Color::Rgb(32, 32, 32)),
-                background: Some(Color::Rgb(211, 211, 211)),
-                ..StyleState::default()
-            }
-        };
         self.emit(b">", style);
     }
 
@@ -761,6 +749,22 @@ impl Cell {
 }
 
 impl StyleState {
+    pub(crate) fn truncation(level: ColorLevel) -> Self {
+        if level == ColorLevel::Monochrome {
+            Self {
+                attributes: REVERSE,
+                ..Self::default()
+            }
+        } else {
+            Self {
+                foreground: Some(Color::Rgb(32, 32, 32)),
+                background: Some(Color::Rgb(211, 211, 211)),
+                ..Self::default()
+            }
+            .for_level(level)
+        }
+    }
+
     fn apply(&mut self, value: u16) {
         match value {
             0 => *self = Self::default(),
@@ -801,7 +805,10 @@ impl StyleState {
         }
     }
 
-    fn for_level(mut self, level: ColorLevel) -> Self {
+    pub(crate) fn for_level(mut self, level: ColorLevel) -> Self {
+        if level == ColorLevel::None {
+            return Self::default();
+        }
         if level == ColorLevel::Monochrome {
             self.foreground = None;
             self.background = None;
@@ -818,7 +825,7 @@ impl StyleState {
         self
     }
 
-    fn write(self, output: &mut Vec<u8>) {
+    pub(crate) fn write(self, output: &mut Vec<u8>) {
         output.extend_from_slice(b"\x1b[0");
         for (attribute, code) in [
             (BOLD, 1),
@@ -988,7 +995,7 @@ mod tests {
             wrap,
             tabstop: 8,
             color,
-            indicators: false,
+            indicator: None,
         }
     }
 
@@ -1206,7 +1213,7 @@ mod tests {
     #[test]
     fn truncation_indicator_requires_content_beyond_the_right_edge() {
         let mut settings = options(12, false, ColorLevel::None);
-        settings.indicators = true;
+        settings.indicator = Some(StyleState::truncation(settings.color));
         let line = render(b"0123456789abcdefghij", settings);
         assert_eq!(line.rows, [b"0123456789a>".to_vec()]);
         assert_eq!(line.display_width, 20);
@@ -1227,7 +1234,7 @@ mod tests {
     #[test]
     fn indicators_replace_whole_unicode_cells_and_fit_one_column() {
         let mut settings = options(4, false, ColorLevel::None);
-        settings.indicators = true;
+        settings.indicator = Some(StyleState::truncation(settings.color));
         let line = render("ab\u{754c}\u{0301}x".as_bytes(), settings);
         assert_eq!(line.rows, [b"ab >".to_vec()]);
         assert_eq!(line.display_width, 5);
@@ -1260,7 +1267,7 @@ mod tests {
     #[test]
     fn tab_width_and_indicator_are_independent_of_chunk_boundaries() {
         let mut settings = options(8, false, ColorLevel::None);
-        settings.indicators = true;
+        settings.indicator = Some(StyleState::truncation(settings.color));
         let line = render(b"a\tb", settings);
         assert_eq!(line.rows, [b"a      >".to_vec()]);
         assert_eq!(line.display_width, 9);
@@ -1270,6 +1277,7 @@ mod tests {
         settings.horizontal = 0;
         settings.width = 4;
         settings.color = ColorLevel::TrueColor;
+        settings.indicator = Some(StyleState::truncation(settings.color));
         let bytes = "\u{1b}[31mab\u{754c}\u{0301}x\u{1b}[0m\t".as_bytes();
         let expected = render(bytes, settings);
         assert_eq!(plain(&expected.rows[0]), "ab >");
@@ -1289,7 +1297,7 @@ mod tests {
     #[test]
     fn indicators_reset_source_style_and_do_not_retain_the_line_suffix() {
         let mut settings = options(4, false, ColorLevel::TrueColor);
-        settings.indicators = true;
+        settings.indicator = Some(StyleState::truncation(settings.color));
         let line = render(b"\x1b[1;31mabcdex", settings);
         assert_eq!(
             line.rows,
@@ -1322,14 +1330,14 @@ mod tests {
             ),
         ] {
             let mut settings = options(1, false, level);
-            settings.indicators = true;
+            settings.indicator = Some(StyleState::truncation(settings.color));
             let line = render(b"\x1b[1;7;31;44mxy", settings);
             assert_eq!(line.rows, [marker.to_vec()]);
             assert_eq!(line.display_width, 2);
             assert_eq!(render(b"x", settings).rows, [b"x".to_vec()]);
         }
         let mut settings = options(4, false, ColorLevel::TrueColor);
-        settings.indicators = true;
+        settings.indicator = Some(StyleState::truncation(settings.color));
         let line = render(b"\x1b[1;7;31;44mabcde", settings);
         assert_eq!(
             line.rows,
