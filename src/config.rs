@@ -114,8 +114,9 @@ mod tests {
     fn absent_or_unreadable_config_uses_defaults() {
         let directory = tempfile::tempdir().unwrap();
         let missing = directory.path().join("missing.json");
+        let default = status(FileConfig::default());
         for path in [None, Some(missing.as_path()), Some(directory.path())] {
-            assert_eq!(status(FileConfig::load_from_path(path)), b"status");
+            assert_eq!(status(FileConfig::load_from_path(path)), default);
         }
     }
 
@@ -123,12 +124,13 @@ mod tests {
     fn reads_valid_configs() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.json");
+        let default = status(FileConfig::default());
         for (contents, expected) in [
-            ("{}", b"status".as_slice()),
-            (r#"{"theme": {}}"#, b"status"),
+            ("{}", default.as_slice()),
+            (r#"{"theme": {}}"#, default.as_slice()),
             (
                 r#"{"theme":{"status":{"background":17}}}"#,
-                b"\x1b[0;48;5;17mstatus\x1b[0m",
+                b"\x1b[0;38;5;16;48;5;17mstatus\x1b[0m",
             ),
         ] {
             fs::write(&path, contents).unwrap();
@@ -140,6 +142,7 @@ mod tests {
     fn invalid_config_uses_defaults_instead_of_partial_styles() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.json");
+        let default = status(FileConfig::default());
         for contents in [
             "",
             "{",
@@ -147,7 +150,7 @@ mod tests {
             r#"{"theme":{"status":{"background":17},"truncation":{"foreground":"red"}}}"#,
         ] {
             fs::write(&path, contents).unwrap();
-            assert_eq!(status(FileConfig::load_from_path(Some(&path))), b"status");
+            assert_eq!(status(FileConfig::load_from_path(Some(&path))), default);
         }
     }
 }

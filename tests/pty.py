@@ -133,16 +133,16 @@ class PagerTerminalTests(unittest.TestCase):
         self.send_wait(child, b"\x12START-\n", lambda screen: screen.row(0).startswith("START-"))
         self.quit(child)
 
-    def test_truncation_indicator_has_contrasting_foreground_and_background(self):
+    def test_default_ui_has_contrasting_foreground_and_background(self):
         path = self.file("\x1b[1;7;31;44m" + "A" * 60 + "\x1b[0m\nSECOND\n")
         cases = [
-            ("xterm-256color", (), None, ("indexed", 234), ("indexed", 252)),
-            ("xterm-256color", (), {"COLORTERM": "truecolor"}, ("rgb", 32, 32, 32), ("rgb", 211, 211, 211)),
-            ("linux", (), None, ("ansi", 0), ("ansi", 7)),
-            ("xterm-256color", ("--color=never",), None, None, None),
-            ("xterm-256color", (), {"NO_COLOR": "1"}, None, None),
+            ("xterm-256color", (), None, ("indexed", 234), ("indexed", 16), ("indexed", 252)),
+            ("xterm-256color", (), {"COLORTERM": "truecolor"}, ("rgb", 32, 32, 32), ("rgb", 0, 0, 0), ("rgb", 211, 211, 211)),
+            ("linux", (), None, ("ansi", 0), ("ansi", 0), ("ansi", 7)),
+            ("xterm-256color", ("--color=never",), None, None, None, None),
+            ("xterm-256color", (), {"NO_COLOR": "1"}, None, None, None),
         ]
-        for term, options, extra, foreground, background in cases:
+        for term, options, extra, foreground, bar_foreground, background in cases:
             with self.subTest(term=term, options=options, environment=extra):
                 child = self.pager(path, *options, columns=12, rows=5, term=term, extra=extra)
                 child.wait_for(lambda screen: screen.row(0) == "A" * 11 + ">" and screen.row(1) == "SECOND")
@@ -150,7 +150,7 @@ class PagerTerminalTests(unittest.TestCase):
                 self.assertEqual(marker.foreground, foreground)
                 self.assertEqual(marker.background, background)
                 self.assertIsNone(child.screen.cells[1][0].background)
-                self.assertIsNone(child.screen.cells[4][0].background)
+                self.assert_cell_colors(child.screen.cells[4], bar_foreground, background)
                 self.quit(child)
 
     def test_custom_theme_styles_ui_without_changing_document_sgr(self):
@@ -228,13 +228,13 @@ class PagerTerminalTests(unittest.TestCase):
             ({"VO_CONFIG": "", "XDG_CONFIG_HOME": str(xdg), "HOME": str(home)}, ("indexed", 22)),
             ({"XDG_CONFIG_HOME": "relative", "HOME": str(home)}, ("indexed", 52)),
             ({"VO_CONFIG": "", "XDG_CONFIG_HOME": "", "HOME": str(home)}, ("indexed", 52)),
-            ({"XDG_CONFIG_HOME": str(missing), "HOME": str(home)}, None),
+            ({"XDG_CONFIG_HOME": str(missing), "HOME": str(home)}, ("indexed", 252)),
         ]
         for environment, background in cases:
             with self.subTest(environment=environment):
                 child = self.pager(path, columns=40, rows=5, extra=environment)
                 child.wait_for(lambda screen: screen.row(0) == "CONTENT" and screen.row(4) == str(path)[:40])
-                self.assert_cell_colors(child.screen.cells[4], None, background)
+                self.assert_cell_colors(child.screen.cells[4], ("indexed", 16), background)
                 self.quit(child)
 
     def test_config_load_failures_silently_use_defaults(self):
@@ -255,7 +255,7 @@ class PagerTerminalTests(unittest.TestCase):
                 child.wait_for(lambda screen: screen.row(0) == "A" * 39 + ">" and screen.row(4).endswith("C-w Wrap"))
                 self.assertEqual(child.screen.row(1), "PLAIN")
                 self.assert_cell_colors(child.screen.cells[0][39:], ("indexed", 234), ("indexed", 252))
-                self.assert_cell_colors(child.screen.cells[4], None, None)
+                self.assert_cell_colors(child.screen.cells[4], ("indexed", 16), ("indexed", 252))
                 self.assertNotIn(b"vo: ", child.raw)
                 self.quit(child)
 

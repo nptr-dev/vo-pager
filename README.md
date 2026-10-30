@@ -6,10 +6,11 @@ layouts are calculated by the pager and update when the terminal is resized.
 By default, truncated lines end with `>` on a light-grey background with a dark
 foreground, downgraded to the terminal's palette. Horizontal scrolling stops at
 the widest line encountered in the current input, including lines no longer on
-screen. The limit adjusts with terminal width and incoming stream data. The bottom bar
-shows the file path, or `stdin`. In truncation mode, `C-w Wrap` appears when an
-encountered line exceeds the available content width. Commands and messages
-temporarily replace the bar.
+screen. The limit adjusts with terminal width and incoming stream data. The
+bottom bar uses black text on a light-grey background and shows the file path,
+or `stdin`. In truncation mode, `C-w Wrap` appears when an encountered line
+exceeds the available content width. Commands and messages temporarily replace
+the bar and inherit its colors.
 
 Build or install with Rust 1.88 or newer:
 

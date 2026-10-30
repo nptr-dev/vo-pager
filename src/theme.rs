@@ -53,7 +53,10 @@ pub struct UiStyle {
 impl Theme {
     /// Resolve colors and cache SGR sequences once for the selected terminal palette.
     pub fn resolve(&self, level: ColorLevel) -> ResolvedTheme {
-        let status = self.status.resolve(StyleState::default());
+        let mut status = StyleState::default();
+        status.foreground = Some(Color::Rgb(0, 0, 0));
+        status.background = Some(Color::Rgb(211, 211, 211));
+        let status = self.status.resolve(status);
         ResolvedTheme {
             status: UiStyle::new(status, level),
             hint: UiStyle::new(self.hint.resolve(status), level),
@@ -220,7 +223,7 @@ mod tests {
             theme
                 .status
                 .paint("\u{754c}e\u{301}".as_bytes().to_vec(), 5),
-            "\u{1b}[0;48;5;17m\u{754c}e\u{301}  \u{1b}[0m".as_bytes()
+            "\u{1b}[0;38;5;16;48;5;17m\u{754c}e\u{301}  \u{1b}[0m".as_bytes()
         );
     }
 
