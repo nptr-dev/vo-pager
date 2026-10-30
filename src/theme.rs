@@ -7,6 +7,7 @@ use crate::render::{BOLD, Color, ColorLevel, DIM, ITALIC, REVERSE, StyleState, U
 #[serde(default, deny_unknown_fields)]
 pub struct Theme {
     status: Style,
+    line_count: Style,
     hint: Style,
     prompt: Style,
     message: Style,
@@ -39,6 +40,7 @@ enum ColorValue {
 
 pub struct ResolvedTheme {
     pub status: UiStyle,
+    pub line_count: UiStyle,
     pub hint: UiStyle,
     pub prompt: UiStyle,
     pub message: UiStyle,
@@ -57,8 +59,12 @@ impl Theme {
         status.foreground = Some(Color::Rgb(0, 0, 0));
         status.background = Some(Color::Rgb(211, 211, 211));
         let status = self.status.resolve(status);
+        let mut line_count = status;
+        line_count.foreground = Some(Color::Ansi(0));
+        line_count.background = Some(Color::Ansi(2));
         ResolvedTheme {
             status: UiStyle::new(status, level),
+            line_count: UiStyle::new(self.line_count.resolve(line_count), level),
             hint: UiStyle::new(self.hint.resolve(status), level),
             prompt: UiStyle::new(self.prompt.resolve(status), level),
             message: UiStyle::new(self.message.resolve(status), level),
@@ -176,6 +182,10 @@ mod tests {
         assert_eq!(
             theme.status.paint(b"status".to_vec(), 8),
             b"\x1b[0;1;2;38;2;171;205;239;48;5;17mstatus  \x1b[0m"
+        );
+        assert_eq!(
+            theme.line_count.paint(b" :12".to_vec(), 0),
+            b"\x1b[0;1;2;30;42m :12\x1b[0m"
         );
         assert_eq!(
             theme.prompt.paint(b"/".to_vec(), 0),

@@ -89,7 +89,7 @@ class PagerTerminalTests(unittest.TestCase):
         self.send_wait(child, b"/needle-unique\n", lambda screen: screen.contains("line-0070"))
         self.send_wait(child, b"n", lambda screen: screen.contains("line-0140"))
         self.send_wait(child, b"N", lambda screen: screen.contains("line-0070"))
-        self.send_wait(child, b"G", lambda screen: screen.contains("line-0199") and screen.row(screen.rows - 1) == str(path)[:screen.columns])
+        self.send_wait(child, b"G", lambda screen: screen.contains("line-0199") and screen.row(screen.rows - 1) == f"{str(path)[:screen.columns - 5]} :200")
         self.send_wait(child, b"g", lambda screen: "line-0000" in screen.row(0))
         self.quit(child)
 
@@ -100,20 +100,38 @@ class PagerTerminalTests(unittest.TestCase):
         self.assertFalse(child.screen.contains("tail-marker"))
         self.assertIn("NEXT-LINE", child.screen.row(1))
         self.assertTrue(child.screen.row(0).endswith(">"))
-        self.assertEqual(child.screen.row(9), f"{str(path)[:31]:<32}C-w Wrap")
+        self.assertEqual(child.screen.row(9), f"{str(path)[:28]} :2".ljust(32) + "C-w Wrap")
         self.send_wait(child, b"\x17", lambda screen: screen.contains("tail-marker") and "NEXT-LINE" in screen.row(2))
-        self.assertEqual(child.screen.row(9), str(path)[:40])
+        self.assertEqual(child.screen.row(9), f"{str(path)[:37]} :2")
         self.send_wait(child, b"\x17", lambda screen: not screen.contains("tail-marker") and "NEXT-LINE" in screen.row(1))
         output = child.output_bytes
         child.resize(100, 10)
         child.wait_for(lambda screen: "tail-marker" in screen.row(0), after_bytes=output)
         self.assertFalse(child.screen.row(0).endswith(">"))
-        self.assertEqual(child.screen.row(9), str(path))
+        self.assertEqual(child.screen.row(9), f"{str(path)[:97]} :2")
         output = child.output_bytes
         child.resize(24, 8)
         child.wait_for(lambda screen: not screen.contains("tail-marker") and "NEXT-LINE" in screen.row(1), after_bytes=output)
         self.assertTrue(child.screen.row(0).endswith(">"))
-        self.assertTrue(child.screen.row(7).endswith("C-w Wrap"))
+        self.assertEqual(child.screen.row(7), f"{str(path)[:12]} :2 C-w Wrap")
+        self.quit(child)
+
+    def test_location_bar_preserves_count_when_clipping_unicode_filename(self):
+        path = Path(self.temporary.name) / "\u754ce\u0301\u754c.txt"
+        path.write_text("FIRST\nLAST", encoding="utf-8")
+        prefix = str(path.parent) + "/"
+        child = self.pager(path, "--wrap", columns=len(prefix) + 12, rows=5)
+        child.wait_for(lambda screen: screen.row(4) == f"{path} :2")
+        output = child.output_bytes
+        child.resize(len(prefix) + 7, 5)
+        child.wait_for(lambda screen: screen.row(4) == prefix + "\u754ce\u0301  :2", after_bytes=output)
+        self.assert_cell_colors(child.screen.cells[4][-3:-2], ("indexed", 16), ("indexed", 252))
+        self.assert_cell_colors(child.screen.cells[4][-2:], ("ansi", 0), ("ansi", 2))
+        output = child.output_bytes
+        child.resize(2, 5)
+        child.wait_for(lambda screen: screen.row(4) == " :", after_bytes=output)
+        self.assert_cell_colors(child.screen.cells[4][:1], ("indexed", 16), ("indexed", 252))
+        self.assert_cell_colors(child.screen.cells[4][1:], ("ansi", 0), ("ansi", 2))
         self.quit(child)
 
     def test_hjkl_scroll_help_keys_and_backward_search(self):
@@ -150,13 +168,19 @@ class PagerTerminalTests(unittest.TestCase):
                 self.assertEqual(marker.foreground, foreground)
                 self.assertEqual(marker.background, background)
                 self.assertIsNone(child.screen.cells[1][0].background)
-                self.assert_cell_colors(child.screen.cells[4], bar_foreground, background)
+                self.assertEqual(child.screen.row(4), " :2 C-w Wrap")
+                line_count_foreground = ("ansi", 0) if bar_foreground is not None else None
+                line_count_background = ("ansi", 2) if background is not None else None
+                self.assert_cell_colors(child.screen.cells[4][:1], bar_foreground, background)
+                self.assert_cell_colors(child.screen.cells[4][1:3], line_count_foreground, line_count_background)
+                self.assert_cell_colors(child.screen.cells[4][3:], bar_foreground, background)
                 self.quit(child)
 
     def test_custom_theme_styles_ui_without_changing_document_sgr(self):
         config = self.config({
             "status": {"foreground": "#ff0000", "background": 17},
             "hint": {"foreground": 214},
+            "line_count": {"foreground": 118, "background": 23},
             "prompt": {"background": 22},
             "message": {"foreground": "default", "background": 52},
             "line_numbers": {"foreground": 33, "background": 236},
@@ -166,12 +190,14 @@ class PagerTerminalTests(unittest.TestCase):
         os.write(writer, b"\x1b[31;44m" + b"A" * 60 + b"\x1b[0m\nPLAIN\n")
         os.close(writer)
         child = self.pager(None, "-N", columns=40, rows=6, stdin_fd=reader, extra={"VO_CONFIG": str(config)})
-        child.wait_for(lambda screen: screen.row(0) == "1 " + "A" * 37 + ">" and screen.row(5).endswith("C-w Wrap"))
+        child.wait_for(lambda screen: screen.row(0) == "1 " + "A" * 37 + ">" and screen.row(5) == "stdin :2".ljust(32) + "C-w Wrap")
         self.assert_cell_colors(child.screen.cells[0][:2], ("indexed", 33), ("indexed", 236))
         self.assert_cell_colors(child.screen.cells[0][2:39], ("ansi", 1), ("ansi", 4))
         self.assert_cell_colors(child.screen.cells[0][39:], ("indexed", 226), ("indexed", 252))
         self.assert_cell_colors(child.screen.cells[1][2:7], None, None)
-        self.assert_cell_colors(child.screen.cells[5][:32], ("indexed", 196), ("indexed", 17))
+        self.assert_cell_colors(child.screen.cells[5][:6], ("indexed", 196), ("indexed", 17))
+        self.assert_cell_colors(child.screen.cells[5][6:8], ("indexed", 118), ("indexed", 23))
+        self.assert_cell_colors(child.screen.cells[5][8:32], ("indexed", 196), ("indexed", 17))
         self.assert_cell_colors(child.screen.cells[5][32:], ("indexed", 214), ("indexed", 17))
 
         # Existing sessions retain the resolved config when the file changes.
@@ -182,8 +208,10 @@ class PagerTerminalTests(unittest.TestCase):
         self.send_wait(child, b"\n", lambda screen: screen.row(5) == "Pattern not found")
         self.assert_cell_colors(child.screen.cells[5], None, ("indexed", 52))
         self.assert_cell_colors(child.screen.cells[1][2:7], None, None)
-        self.send_wait(child, b"\x17", lambda screen: screen.row(5) == "stdin")
-        self.assert_cell_colors(child.screen.cells[5], ("indexed", 196), ("indexed", 17))
+        self.send_wait(child, b"\x17", lambda screen: screen.row(5) == "stdin :2")
+        self.assert_cell_colors(child.screen.cells[5][:6], ("indexed", 196), ("indexed", 17))
+        self.assert_cell_colors(child.screen.cells[5][6:8], ("indexed", 118), ("indexed", 23))
+        self.assert_cell_colors(child.screen.cells[5][8:], ("indexed", 196), ("indexed", 17))
         self.assert_cell_colors(child.screen.cells[2][2:7], None, None)
         self.quit(child)
 
@@ -191,17 +219,18 @@ class PagerTerminalTests(unittest.TestCase):
         path = self.file("A" * 60 + "\nPLAIN\n")
         config = self.config({
             "status": {"foreground": "#ff0000", "background": 21, "bold": True},
+            "line_count": {"foreground": "#00ff00", "background": 22},
             "truncation": {"foreground": "#ff0000", "background": 21},
         })
         cases = [
-            ("xterm-256color", (), {}, ("indexed", 196), ("indexed", 21)),
-            ("xterm-256color", (), {"COLORTERM": "truecolor"}, ("rgb", 255, 0, 0), ("indexed", 21)),
-            ("linux", (), {}, ("ansi", 1), ("ansi", 4)),
-            ("xterm-256color", ("--color=never",), {}, None, None),
-            ("xterm-256color", (), {"NO_COLOR": "1"}, None, None),
-            ("xterm-256color", ("--color=always",), {"NO_COLOR": "1", "COLORTERM": "truecolor"}, ("rgb", 255, 0, 0), ("indexed", 21)),
+            ("xterm-256color", (), {}, ("indexed", 196), ("indexed", 21), ("indexed", 46), ("indexed", 22)),
+            ("xterm-256color", (), {"COLORTERM": "truecolor"}, ("rgb", 255, 0, 0), ("indexed", 21), ("rgb", 0, 255, 0), ("indexed", 22)),
+            ("linux", (), {}, ("ansi", 1), ("ansi", 4), ("ansi", 2), ("ansi", 2)),
+            ("xterm-256color", ("--color=never",), {}, None, None, None, None),
+            ("xterm-256color", (), {"NO_COLOR": "1"}, None, None, None, None),
+            ("xterm-256color", ("--color=always",), {"NO_COLOR": "1", "COLORTERM": "truecolor"}, ("rgb", 255, 0, 0), ("indexed", 21), ("rgb", 0, 255, 0), ("indexed", 22)),
         ]
-        for term, options, environment, foreground, background in cases:
+        for term, options, environment, foreground, background, count_foreground, count_background in cases:
             with self.subTest(term=term, options=options, environment=environment):
                 child = self.pager(
                     path, "-N", *options, columns=20, rows=5, term=term,
@@ -211,7 +240,10 @@ class PagerTerminalTests(unittest.TestCase):
                 self.assert_cell_colors(child.screen.cells[0][:2], None, None)
                 self.assert_cell_colors(child.screen.cells[0][19:], foreground, background)
                 self.assert_cell_colors(child.screen.cells[1][2:7], None, None)
-                self.assert_cell_colors(child.screen.cells[4], foreground, background)
+                self.assertEqual(child.screen.row(4), f"{str(path)[:8]} :2 C-w Wrap")
+                self.assert_cell_colors(child.screen.cells[4][:9], foreground, background)
+                self.assert_cell_colors(child.screen.cells[4][9:11], count_foreground, count_background)
+                self.assert_cell_colors(child.screen.cells[4][11:], foreground, background)
                 if foreground is None:
                     for sgr in re.findall(rb"\x1b\[([0-9;]*)m", child.raw):
                         self.assertTrue(all(code in (b"", b"0") for code in sgr.split(b";")), sgr)
@@ -233,8 +265,11 @@ class PagerTerminalTests(unittest.TestCase):
         for environment, background in cases:
             with self.subTest(environment=environment):
                 child = self.pager(path, columns=40, rows=5, extra=environment)
-                child.wait_for(lambda screen: screen.row(0) == "CONTENT" and screen.row(4) == str(path)[:40])
-                self.assert_cell_colors(child.screen.cells[4], ("indexed", 16), background)
+                child.wait_for(lambda screen: screen.row(0) == "CONTENT" and screen.row(4) == f"{str(path)[:37]} :1")
+                count_start = child.screen.row(4).index(":1")
+                self.assert_cell_colors(child.screen.cells[4][:count_start], ("indexed", 16), background)
+                self.assert_cell_colors(child.screen.cells[4][count_start:count_start + 2], ("ansi", 0), ("ansi", 2))
+                self.assert_cell_colors(child.screen.cells[4][count_start + 2:], ("indexed", 16), background)
                 self.quit(child)
 
     def test_config_load_failures_silently_use_defaults(self):
@@ -255,7 +290,11 @@ class PagerTerminalTests(unittest.TestCase):
                 child.wait_for(lambda screen: screen.row(0) == "A" * 39 + ">" and screen.row(4).endswith("C-w Wrap"))
                 self.assertEqual(child.screen.row(1), "PLAIN")
                 self.assert_cell_colors(child.screen.cells[0][39:], ("indexed", 234), ("indexed", 252))
-                self.assert_cell_colors(child.screen.cells[4], ("indexed", 16), ("indexed", 252))
+                self.assertEqual(child.screen.row(4), f"{str(path)[:28]} :2".ljust(32) + "C-w Wrap")
+                count_start = child.screen.row(4).index(":2")
+                self.assert_cell_colors(child.screen.cells[4][:count_start], ("indexed", 16), ("indexed", 252))
+                self.assert_cell_colors(child.screen.cells[4][count_start:count_start + 2], ("ansi", 0), ("ansi", 2))
+                self.assert_cell_colors(child.screen.cells[4][count_start + 2:], ("indexed", 16), ("indexed", 252))
                 self.assertNotIn(b"vo: ", child.raw)
                 self.quit(child)
 
@@ -324,24 +363,28 @@ class PagerTerminalTests(unittest.TestCase):
 
     def test_horizontal_limit_grows_with_partial_stream_input(self):
         reader, writer = os.pipe()
-        self.addCleanup(os.close, writer)
+        producer = os.fdopen(writer, "wb", buffering=0)
+        self.addCleanup(producer.close)
         child = self.pager(None, stdin_fd=reader, columns=12, rows=5)
-        child.wait_for(lambda screen: screen.row(4) == "stdin")
-        self.send_wait(child, b"999\x1b[C", lambda screen: not screen.row(0) and screen.row(4) == "stdin")
+        child.wait_for(lambda screen: screen.row(4) == "stdin :0+")
+        self.send_wait(child, b"999\x1b[C", lambda screen: not screen.row(0) and screen.row(4) == "stdin :0+")
         output = child.output_bytes
-        os.write(writer, b"0123456789abcdefghij")
+        producer.write(b"0123456789abcdefghij")
         child.wait_for(lambda screen: screen.row(0) == "0123456789a>", after_bytes=output)
         self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "89abcdefghij")
         output = child.output_bytes
-        os.write(writer, b"klmnopqrst")
+        producer.write(b"klmnopqrst")
         child.wait_for(lambda screen: screen.row(0) == "89abcdefghi>", after_bytes=output)
         self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "ijklmnopqrst")
         self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "ijklmnopqrst")
         output = child.output_bytes
         child.resize(32, 5)
         child.wait_for(lambda screen: screen.row(0) == "0123456789abcdefghijklmnopqrst", after_bytes=output)
-        self.assertEqual(child.screen.row(4), "stdin")
+        self.assertEqual(child.screen.row(4), "stdin :1+")
         self.send_wait(child, b"999\x1b[C", lambda screen: screen.row(0) == "0123456789abcdefghijklmnopqrst")
+        output = child.output_bytes
+        producer.close()
+        child.wait_for(lambda screen: screen.row(4) == "stdin :1", after_bytes=output)
         self.quit(child)
 
     def test_switching_files_restores_stream_history_and_file_position(self):
@@ -361,13 +404,13 @@ class PagerTerminalTests(unittest.TestCase):
         reader, writer = os.pipe()
         self.addCleanup(os.close, writer)
         child = self.pager(None, stdin_fd=reader, rows=8)
-        child.wait_for(lambda screen: screen.row(7) == "stdin")
+        child.wait_for(lambda screen: screen.row(7) == "stdin :0+")
         os.write(writer, b"LIVE-FIRST\nlive-second")
-        child.wait_for(lambda screen: screen.contains("LIVE-FIRST") and bool(screen.row(screen.rows - 1).strip()))
+        child.wait_for(lambda screen: screen.contains("LIVE-FIRST") and screen.row(7) == "stdin :2+")
         child.wait_for(lambda screen: "live-second" in screen.row(1))
         output = child.output_bytes
         os.write(writer, b"-continued\nlive-third")
-        child.wait_for(lambda screen: "live-second-continued" in screen.row(1) and "live-third" in screen.row(2), after_bytes=output)
+        child.wait_for(lambda screen: "live-second-continued" in screen.row(1) and "live-third" in screen.row(2) and screen.row(7) == "stdin :3+", after_bytes=output)
         self.send_wait(child, b"j", lambda screen: "live-second-continued" in screen.row(0))
         # The writer stays open until cleanup. Exit therefore proves q does not
         # wait for the stream to close or for a blocked reader to return.
@@ -378,7 +421,7 @@ class PagerTerminalTests(unittest.TestCase):
         child = self.pager(path, "--wrap", columns=32, rows=8)
         child.wait_for(lambda screen: "FIRST" in screen.row(0))
         self.assertFalse(child.screen.contains("WRAPPED-EOF"))
-        self.send_wait(child, b"G", lambda screen: screen.contains("WRAPPED-EOF") and screen.row(7) == str(path)[:screen.columns])
+        self.send_wait(child, b"G", lambda screen: screen.contains("WRAPPED-EOF") and screen.row(7) == f"{str(path)[:screen.columns - 3]} :2")
         self.assertNotIn("FIRST", child.screen.row(0))
         self.assertTrue(any("wrapped-content" in child.screen.row(row) for row in range(6)))
         self.quit(child)
@@ -386,22 +429,22 @@ class PagerTerminalTests(unittest.TestCase):
     def test_follow_empty_file_append_and_truncate(self):
         path = self.file("")
         child = self.pager(path)
-        child.wait_for(lambda screen: screen.row(23) == str(path)[:screen.columns])
+        child.wait_for(lambda screen: screen.row(23) == f"{str(path)[:screen.columns - 3]} :0")
         child.send(b"F")
         output = child.output_bytes
         with path.open("ab") as producer:
             producer.write(b"APPENDED-FIRST\nAPPENDED-SECOND\n")
-        child.wait_for(lambda screen: screen.contains("APPENDED-FIRST") and screen.contains("APPENDED-SECOND"), after_bytes=output)
+        child.wait_for(lambda screen: screen.contains("APPENDED-FIRST") and screen.contains("APPENDED-SECOND") and screen.row(23) == f"{str(path)[:screen.columns - 3]} :2", after_bytes=output)
         output = child.output_bytes
         path.write_text("AFTER-TRUNCATE\n", encoding="utf-8")
-        child.wait_for(lambda screen: screen.contains("AFTER-TRUNCATE") and not screen.contains("APPENDED-FIRST"), after_bytes=output)
+        child.wait_for(lambda screen: screen.contains("AFTER-TRUNCATE") and not screen.contains("APPENDED-FIRST") and screen.row(23) == f"{str(path)[:screen.columns - 3]} :1", after_bytes=output)
         self.quit(child)
 
     def test_named_fifo_can_quit_before_a_producer_connects(self):
         path = Path(self.temporary.name) / "input.fifo"
         os.mkfifo(path)
         child = self.pager(path)
-        child.wait_for(lambda screen: screen.row(23) == str(path)[:screen.columns])
+        child.wait_for(lambda screen: screen.row(23) == f"{str(path)[:screen.columns - 4]} :0+")
         self.quit(child)
 
     def test_search_handles_long_colored_lines_and_exact_anchors(self):

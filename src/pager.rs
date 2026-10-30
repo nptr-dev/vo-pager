@@ -412,32 +412,38 @@ impl Pager {
     }
 
     fn location_bar(&self, width: usize, content_width: usize) -> Vec<u8> {
-        if self.config.wrap || self.horizontal.max_width <= content_width {
-            return self
-                .config
-                .theme
-                .status
-                .paint(clip(&self.source.name, width), width);
-        }
-        const HINT: &[u8] = b"C-w Wrap";
-        let location_width = width.saturating_sub(HINT.len() + 1);
-        let mut status = if location_width == 0 {
-            Vec::new()
+        let hint: &[u8] = if !self.config.wrap && self.horizontal.max_width > content_width {
+            b"C-w Wrap"
         } else {
-            clip(&self.source.name, location_width)
+            b""
         };
-        let occupied = String::from_utf8_lossy(&status).width();
-        status.extend(std::iter::repeat_n(
-            b' ',
-            width.saturating_sub(HINT.len()).saturating_sub(occupied),
-        ));
-        let mut status = self.config.theme.status.paint(status, 0);
-        status.extend(
-            self.config
-                .theme
-                .hint
-                .paint(HINT[..HINT.len().min(width)].to_vec(), 0),
+        let location_width = width.saturating_sub(hint.len() + usize::from(!hint.is_empty()));
+        let count = clip(
+            &format!(":{}", self.line_count_text()),
+            location_width.saturating_sub(1),
         );
+        let mut name = clip(
+            &self.source.name,
+            location_width.saturating_sub(count.len() + 1),
+        );
+        if location_width != 0 {
+            name.push(b' ');
+        }
+        let occupied = String::from_utf8_lossy(&name).width() + count.len();
+        let mut status = self.config.theme.status.paint(name, 0);
+        status.extend(self.config.theme.line_count.paint(count, 0));
+        status.extend(self.config.theme.status.paint(
+            vec![b' '; width.saturating_sub(hint.len()).saturating_sub(occupied)],
+            0,
+        ));
+        if !hint.is_empty() {
+            status.extend(
+                self.config
+                    .theme
+                    .hint
+                    .paint(hint[..hint.len().min(width)].to_vec(), 0),
+            );
+        }
         status
     }
 
@@ -792,17 +798,24 @@ impl Pager {
         Ok(false)
     }
 
-    fn info(&self) -> String {
+    fn line_count_text(&self) -> String {
         format!(
-            "{} | line {} | {}{} lines | {} bytes | file {}/{}",
-            self.source.name,
-            self.top.line + 1,
+            "{}{}",
             self.source.line_count(),
             if self.source.indexed() && self.source.eof() {
                 ""
             } else {
                 "+"
-            },
+            }
+        )
+    }
+
+    fn info(&self) -> String {
+        format!(
+            "{} | line {} | {} lines | {} bytes | file {}/{}",
+            self.source.name,
+            self.top.line + 1,
+            self.line_count_text(),
             self.source.len(),
             self.current + 1,
             self.paths.len()
@@ -1050,6 +1063,9 @@ fn clip(text: &str, width: usize) -> Vec<u8> {
 }
 
 fn clip_at(text: &str, width: usize, horizontal: usize) -> Vec<u8> {
+    if width == 0 {
+        return Vec::new();
+    }
     let mut renderer = LineRenderer::new(
         RenderOptions {
             width: width.max(1),
