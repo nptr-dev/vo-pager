@@ -130,7 +130,7 @@ mod tests {
             (r#"{"theme": {}}"#, default.as_slice()),
             (
                 r#"{"theme":{"status":{"background":17}}}"#,
-                b"\x1b[0;38;5;16;48;5;17mstatus\x1b[0m",
+                b"\x1b[0;38;5;231;48;5;17mstatus\x1b[0m",
             ),
         ] {
             fs::write(&path, contents).unwrap();

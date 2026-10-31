@@ -7,10 +7,10 @@ By default, truncated lines end with `>` on a light-grey background with a dark
 foreground, downgraded to the terminal's palette. Horizontal scrolling stops at
 the widest line encountered in the current input, including lines no longer on
 screen. The limit adjusts with terminal width and incoming stream data. The
-bottom bar uses black text on a light-grey background and shows the file path,
-or `stdin`, followed by a line count in black on green, such as
-`application.log :12`. A `+` suffix marks an incomplete count while a file is
-partially indexed or a stream is still open. In truncation mode, `C-w Wrap`
+bottom bar uses white text on dark grey, with only the file path, or `stdin`,
+highlighted in black on light grey. The filename is followed by the current line
+position, such as `application.log :12`. The position is the 1-based logical line
+at the top of the screen, or `0` for empty input. In truncation mode, `C-w Wrap`
 appears when an encountered line exceeds the available content width. Commands
 and messages temporarily replace the bar and inherit its colors.
 
@@ -111,7 +111,8 @@ For example:
 {
   "theme": {
     "status": { "foreground": "#cdd6f4", "background": "#313244" },
-    "line_count": { "foreground": 0, "background": 2 },
+    "filename": { "foreground": "#000000", "background": "#d3d3d3" },
+    "line_count": { "foreground": "#ffffff", "background": "#202020" },
     "hint": { "foreground": "#89b4fa", "bold": true },
     "prompt": { "foreground": "#a6e3a1" },
     "message": { "foreground": "#f9e2af" },
@@ -124,10 +125,12 @@ For example:
 Every style accepts `foreground`, `background`, and the boolean attributes
 `bold`, `dim`, `italic`, `underline`, and `reverse`. Colors can be `"#RRGGBB"`,
 an integer palette index from 0 to 255, or `"default"` for the terminal's default
-color. Omitted fields retain their defaults; `hint`, `prompt`, and `message`
-inherit `status`. The `line_count` style inherits `status` attributes and uses
-black text on a green background by default. Styles are reset between UI
-elements and document content, so the document keeps its own ANSI colors.
+color. The `status` style controls the bar's base colors, including blank space,
+and defaults to white on dark grey. Omitted fields retain their defaults;
+`line_count` (the current line position), `hint`, `prompt`, and `message` inherit
+`status`. The `filename` highlight inherits `status` attributes but defaults to
+black on light grey. Styles are reset between UI elements and document content,
+so the document keeps its own ANSI colors.
 
 Capability detection and theme color conversion run once at startup using the
 environment and terminfo. Redraws reuse the resolved styles and cached UI SGR

@@ -418,20 +418,22 @@ impl Pager {
             b""
         };
         let location_width = width.saturating_sub(hint.len() + usize::from(!hint.is_empty()));
-        let count = clip(
-            &format!(":{}", self.line_count_text()),
-            location_width.saturating_sub(1),
-        );
+        let line = if self.source.is_empty() {
+            0
+        } else {
+            self.top.line + 1
+        };
+        let position = clip(&format!(":{line}"), location_width.saturating_sub(1));
         let mut name = clip(
             &self.source.name,
-            location_width.saturating_sub(count.len() + 1),
+            location_width.saturating_sub(position.len() + 1),
         );
         if location_width != 0 {
             name.push(b' ');
         }
-        let occupied = String::from_utf8_lossy(&name).width() + count.len();
-        let mut status = self.config.theme.status.paint(name, 0);
-        status.extend(self.config.theme.line_count.paint(count, 0));
+        let occupied = String::from_utf8_lossy(&name).width() + position.len();
+        let mut status = self.config.theme.filename.paint(name, 0);
+        status.extend(self.config.theme.line_count.paint(position, 0));
         status.extend(self.config.theme.status.paint(
             vec![b' '; width.saturating_sub(hint.len()).saturating_sub(occupied)],
             0,

@@ -7,6 +7,7 @@ use crate::render::{BOLD, Color, ColorLevel, DIM, ITALIC, REVERSE, StyleState, U
 #[serde(default, deny_unknown_fields)]
 pub struct Theme {
     status: Style,
+    filename: Style,
     line_count: Style,
     hint: Style,
     prompt: Style,
@@ -40,6 +41,7 @@ enum ColorValue {
 
 pub struct ResolvedTheme {
     pub status: UiStyle,
+    pub filename: UiStyle,
     pub line_count: UiStyle,
     pub hint: UiStyle,
     pub prompt: UiStyle,
@@ -56,15 +58,16 @@ impl Theme {
     /// Resolve colors and cache SGR sequences once for the selected terminal palette.
     pub fn resolve(&self, level: ColorLevel) -> ResolvedTheme {
         let mut status = StyleState::default();
-        status.foreground = Some(Color::Rgb(0, 0, 0));
-        status.background = Some(Color::Rgb(211, 211, 211));
+        status.foreground = Some(Color::Rgb(255, 255, 255));
+        status.background = Some(Color::Rgb(32, 32, 32));
         let status = self.status.resolve(status);
-        let mut line_count = status;
-        line_count.foreground = Some(Color::Ansi(0));
-        line_count.background = Some(Color::Ansi(2));
+        let mut filename = status;
+        filename.foreground = Some(Color::Rgb(0, 0, 0));
+        filename.background = Some(Color::Rgb(211, 211, 211));
         ResolvedTheme {
             status: UiStyle::new(status, level),
-            line_count: UiStyle::new(self.line_count.resolve(line_count), level),
+            filename: UiStyle::new(self.filename.resolve(filename), level),
+            line_count: UiStyle::new(self.line_count.resolve(status), level),
             hint: UiStyle::new(self.hint.resolve(status), level),
             prompt: UiStyle::new(self.prompt.resolve(status), level),
             message: UiStyle::new(self.message.resolve(status), level),
@@ -184,8 +187,12 @@ mod tests {
             b"\x1b[0;1;2;38;2;171;205;239;48;5;17mstatus  \x1b[0m"
         );
         assert_eq!(
+            theme.filename.paint(b"file ".to_vec(), 0),
+            b"\x1b[0;1;2;38;2;0;0;0;48;2;211;211;211mfile \x1b[0m"
+        );
+        assert_eq!(
             theme.line_count.paint(b" :12".to_vec(), 0),
-            b"\x1b[0;1;2;30;42m :12\x1b[0m"
+            theme.status.paint(b" :12".to_vec(), 0)
         );
         assert_eq!(
             theme.prompt.paint(b"/".to_vec(), 0),
@@ -233,7 +240,7 @@ mod tests {
             theme
                 .status
                 .paint("\u{754c}e\u{301}".as_bytes().to_vec(), 5),
-            "\u{1b}[0;38;5;16;48;5;17m\u{754c}e\u{301}  \u{1b}[0m".as_bytes()
+            "\u{1b}[0;38;5;231;48;5;17m\u{754c}e\u{301}  \u{1b}[0m".as_bytes()
         );
     }
 
