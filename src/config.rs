@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FileConfig {
+    pub wrap: bool,
     pub theme: Theme,
 }
 
@@ -146,7 +147,7 @@ mod tests {
         for contents in [
             "",
             "{",
-            r#"{"theme":{"status":{"background":17}},"wrap":true}"#,
+            r#"{"theme":{"status":{"background":17}},"unknown":true}"#,
             r#"{"theme":{"status":{"background":17},"truncation":{"foreground":"red"}}}"#,
         ] {
             fs::write(&path, contents).unwrap();

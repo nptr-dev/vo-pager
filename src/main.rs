@@ -8,7 +8,7 @@ use vo_pager::terminal::Capabilities;
 
 #[derive(Default)]
 struct Args {
-    wrap: bool,
+    wrap: Option<bool>,
     line_numbers: bool,
     case: Case,
     quit_if_one_screen: bool,
@@ -43,8 +43,8 @@ impl Args {
             match argument {
                 Arg::Short('h') | Arg::Long("help") => return Ok(Invocation::Help),
                 Arg::Short('V') | Arg::Long("version") => return Ok(Invocation::Version),
-                Arg::Short('S') | Arg::Long("chop-long-lines") => args.wrap = false,
-                Arg::Long("wrap") => args.wrap = true,
+                Arg::Short('S') | Arg::Long("chop-long-lines") => args.wrap = Some(false),
+                Arg::Long("wrap") => args.wrap = Some(true),
                 Arg::Short('N') | Arg::Long("line-numbers") => args.line_numbers = true,
                 Arg::Short('i') | Arg::Long("ignore-case") => args.case = Case::Smart,
                 Arg::Short('I') | Arg::Long("ignore-case-always") => args.case = Case::Insensitive,
@@ -132,13 +132,13 @@ fn execute() -> io::Result<()> {
         Color::Auto if std::env::var_os("NO_COLOR").is_some() => ColorLevel::None,
         _ => capabilities.color,
     };
-    let theme = FileConfig::load().theme.resolve(color);
+    let file_config = FileConfig::load();
     let config = Config {
-        wrap: args.wrap,
+        wrap: args.wrap.unwrap_or(file_config.wrap),
         line_numbers: args.line_numbers,
         tabstop: usize::from(args.tabstop),
         color,
-        theme,
+        theme: file_config.theme.resolve(color),
         no_init: args.no_init,
         quit_if_one_screen: args.quit_if_one_screen,
         case: args.case,
@@ -173,7 +173,7 @@ Usage: vo [OPTIONS] [+G|+F|+LINE] [FILE ...]\n\n\
 Read files or a stream from stdin; '-' explicitly selects stdin.\n\
 Ctrl-W toggles viewport truncation and wrapping; F1 or ? shows pager keys.\n\n\
 Options:\n\
-  -S, --chop-long-lines     Truncate long lines (default)\n\
+  -S, --chop-long-lines     Truncate long lines; scroll horizontally\n\
       --wrap                Wrap at terminal display-cell boundaries\n\
   -N, --line-numbers        Show logical line numbers\n\
   -i, --ignore-case         Ignore case unless pattern has uppercase letters\n\
@@ -186,8 +186,9 @@ Options:\n\
       --initial-command C   Start at G (end), F (follow), or line number\n\
   -h, --help                Show this help\n\
   -V, --version             Show the version\n\n\
-Theme config: $VO_CONFIG, $XDG_CONFIG_HOME/vo/config.json,\n\
-              or ~/.config/vo/config.json (including macOS).\n";
+Config: $VO_CONFIG, $XDG_CONFIG_HOME/vo/config.json,\n\
+        or ~/.config/vo/config.json (including macOS).\n\
+Set \"wrap\": true for wrapping (default: false); layout flags override it.\n";
 
 #[cfg(test)]
 mod tests {

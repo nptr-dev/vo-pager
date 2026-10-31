@@ -93,7 +93,7 @@ reopening it using `:e`. This is a viewing alternative, with the commands above;
 lesskey customizations, input preprocessors, filtering, and the full GNU less
 option set are outside the current implementation.
 
-## Themes
+## Configuration
 
 `vo` selects one JSON config path for interactive viewing, in this order:
 
@@ -103,12 +103,18 @@ option set are outside the current implementation.
 
 If the selected file is missing, unreadable, or invalid, `vo` silently uses the
 built-in defaults, including when `VO_CONFIG` is set. Redirected output continues
-to copy the input bytes without loading a theme.
+to copy the input bytes without loading configuration.
+
+Set `"wrap": true` to start with line wrapping, or `false` (the default) to
+truncate long lines and scroll horizontally. The `--wrap` and
+`-S`/`--chop-long-lines` command-line flags override this setting; the last layout
+flag wins.
 
 For example:
 
 ```json
 {
+  "wrap": true,
   "theme": {
     "status": { "foreground": "#cdd6f4", "background": "#313244" },
     "filename": { "foreground": "#000000", "background": "#d3d3d3" },
@@ -121,6 +127,8 @@ For example:
   }
 }
 ```
+
+### Themes
 
 Every style accepts `foreground`, `background`, and the boolean attributes
 `bold`, `dim`, `italic`, `underline`, and `reverse`. Colors can be `"#RRGGBB"`,

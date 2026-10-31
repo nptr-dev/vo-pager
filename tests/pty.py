@@ -125,6 +125,29 @@ class PagerTerminalTests(unittest.TestCase):
         self.assertEqual(child.screen.row(7), f"{str(path)[:12]} :1 C-w Wrap")
         self.quit(child)
 
+    def test_config_sets_initial_layout_and_cli_flags_override_it(self):
+        path = self.file("0123456789TAIL\nNEXT\n")
+        config = Path(self.temporary.name) / "config.json"
+        cases = [
+            ({}, (), False),
+            ({"wrap": False}, (), False),
+            ({"wrap": True}, (), True),
+            ({"wrap": True}, ("-S",), False),
+            ({"wrap": True}, ("--chop-long-lines",), False),
+            ({"wrap": False}, ("--wrap",), True),
+            ({"wrap": True}, ("--wrap", "-S"), False),
+            ({"wrap": False}, ("-S", "--wrap"), True),
+        ]
+        for configuration, options, wrapped in cases:
+            with self.subTest(configuration=configuration, options=options):
+                config.write_text(json.dumps(configuration), encoding="utf-8")
+                child = self.pager(path, *options, columns=12, rows=5, extra={"VO_CONFIG": str(config)})
+                expected = ["0123456789TA", "IL", "NEXT"] if wrapped else ["0123456789T>", "NEXT"]
+                child.wait_for(lambda screen: [screen.row(row) for row in range(len(expected))] == expected)
+                if not wrapped:
+                    self.send_wait(child, b"l", lambda screen: screen.row(0) == "23456789TAIL")
+                self.quit(child)
+
     def test_location_bar_preserves_position_when_clipping_unicode_filename(self):
         path = Path(self.temporary.name) / "\u754ce\u0301\u754c.txt"
         path.write_text("FIRST\nLAST", encoding="utf-8")
