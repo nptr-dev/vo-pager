@@ -1,0 +1,3 @@
+[tasks.install]
+description = "Build and install vo binary with cargo"
+run = "cargo install --path . --locked"
